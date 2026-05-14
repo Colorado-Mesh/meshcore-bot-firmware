@@ -22,6 +22,7 @@ def main():
         str(ROOT / "tests" / "firmware_bot" / "test_firmware_bot.cpp"),
         str(SRC_DIR / "FirmwareBot.cpp"),
         str(SRC_DIR / "BotPolicy.cpp"),
+        str(SRC_DIR / "BotCommands.cpp"),
         "-o",
         str(binary),
     ]

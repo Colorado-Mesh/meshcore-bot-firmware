@@ -1,0 +1,596 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Thu, 14 May 2026 14:03:07 -0600
+Subject: [PATCH 3/3] Add firmware bot commands
+
+---
+ examples/companion_radio/BotCommands.cpp | 171 +++++++++++++++++++++++++++++++
+ examples/companion_radio/BotCommands.h   |  10 ++
+ examples/companion_radio/BotTypes.h      |  43 +++++++-
+ examples/companion_radio/FirmwareBot.cpp |  35 +++++++
+ examples/companion_radio/FirmwareBot.h   |   5 +
+ examples/companion_radio/MyMesh.cpp      | 131 +++++++++++++++++++++--
+ examples/companion_radio/MyMesh.h        |  22 +++-
+ 7 files changed, 406 insertions(+), 11 deletions(-)
+diff --git a/examples/companion_radio/BotCommands.cpp b/examples/companion_radio/BotCommands.cpp
+new file mode 100644
+index 00000000..5b13fbfe
+--- /dev/null
++++ b/examples/companion_radio/BotCommands.cpp
+@@ -0,0 +1,171 @@
++#include "BotCommands.h"
++
++#include <ctype.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <string.h>
++
++namespace {
++
++BotCommandResult makeResult(BotCommandResultCode code, size_t text_len) {
++  BotCommandResult result = { code, text_len };
++  return result;
++}
++
++size_t boundedStrLen(const char* value, size_t max_len) {
++  size_t len = 0;
++  while (value && len < max_len && value[len] != 0) len++;
++  return len;
++}
++
++BotCommandResult writeText(char* output, size_t output_len, const char* text) {
++  if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++
++  size_t text_len = boundedStrLen(text, BOT_MAX_RESPONSE_LEN + 1);
++  size_t copy_len = text_len;
++  if (copy_len + 1 > output_len) copy_len = output_len - 1;
++  if (copy_len > 0) memcpy(output, text, copy_len);
++  output[copy_len] = 0;
++
++  return makeResult(copy_len < text_len ? BOT_COMMAND_RESULT_TRUNCATED : BOT_COMMAND_RESULT_OK, copy_len);
++}
++
++BotCommandResult writeFormatted(char* output, size_t output_len, const char* format, ...) {
++  if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++
++  va_list args;
++  va_start(args, format);
++  int n = vsnprintf(output, output_len, format, args);
++  va_end(args);
++
++  if (n < 0) {
++    output[0] = 0;
++    return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++  }
++
++  size_t written = (size_t)n;
++  if (written >= output_len) written = output_len - 1;
++  return makeResult((size_t)n >= output_len ? BOT_COMMAND_RESULT_TRUNCATED : BOT_COMMAND_RESULT_OK, written);
++}
++
++bool parseUInt(const char* text, size_t len, size_t* pos, uint16_t* value) {
++  uint32_t parsed = 0;
++  size_t start = *pos;
++  while (*pos < len && isdigit((unsigned char)text[*pos])) {
++    parsed = parsed * 10 + (uint32_t)(text[*pos] - '0');
++    if (parsed > 1000) return false;
++    (*pos)++;
++  }
++  if (*pos == start) return false;
++  *value = (uint16_t)parsed;
++  return true;
++}
++
++bool isSupportedSides(uint16_t sides) {
++  return sides == 4 || sides == 6 || sides == 8 || sides == 10 || sides == 12 || sides == 16 || sides == 20;
++}
++
++bool parseDice(const BotCommand& command, uint16_t* count, uint16_t* sides) {
++  *count = 1;
++  *sides = 6;
++  if (command.args_len == 0) return true;
++
++  const char* text = command.args;
++  size_t len = command.args_len;
++  size_t pos = 0;
++
++  if (text[pos] == 'd' || text[pos] == 'D') {
++    pos++;
++    if (!parseUInt(text, len, &pos, sides)) return false;
++  } else {
++    uint16_t first = 0;
++    if (!parseUInt(text, len, &pos, &first)) return false;
++    if (pos < len && (text[pos] == 'd' || text[pos] == 'D')) {
++      *count = first;
++      pos++;
++      if (!parseUInt(text, len, &pos, sides)) return false;
++    } else {
++      *sides = first;
++    }
++  }
++
++  return pos == len && *count >= 1 && *count <= 10 && isSupportedSides(*sides);
++}
++
++uint16_t rollOnce(uint32_t* state, uint16_t sides) {
++  *state = (*state * 1664525UL) + 1013904223UL;
++  return (uint16_t)((*state >> 16) % sides) + 1;
++}
++
++BotCommandResult executeDice(const BotCommand& command, const BotCommandContext& context, char* output, size_t output_len) {
++  uint16_t count = 1;
++  uint16_t sides = 6;
++  if (!parseDice(command, &count, &sides)) {
++    return writeText(output, output_len, "Usage: !roll [d6|d20|2d6], sides: d4 d6 d8 d10 d12 d16 d20");
++  }
++
++  uint32_t state = context.random_seed ^ ((uint32_t)count << 16) ^ sides;
++  if (state == 0) state = 1;
++
++  if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++  int written = count == 1 ? snprintf(output, output_len, "Rolled d%u: ", (unsigned)sides)
++                           : snprintf(output, output_len, "Rolled %ud%u: ", (unsigned)count, (unsigned)sides);
++  if (written < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++
++  size_t pos = (size_t)written;
++  uint16_t total = 0;
++  for (uint16_t i = 0; i < count; i++) {
++    uint16_t roll = rollOnce(&state, sides);
++    total += roll;
++    if (pos < output_len) {
++      int n = snprintf(&output[pos], output_len - pos, i == 0 ? "%u" : "+%u", (unsigned)roll);
++      if (n < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++      pos += (size_t)n;
++    }
++  }
++  if (count > 1 && pos < output_len) {
++    int n = snprintf(&output[pos], output_len - pos, "=%u", (unsigned)total);
++    if (n < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++    pos += (size_t)n;
++  }
++
++  size_t actual = boundedStrLen(output, output_len);
++  return makeResult(pos >= output_len ? BOT_COMMAND_RESULT_TRUNCATED : BOT_COMMAND_RESULT_OK, actual);
++}
++
++}
++
++namespace BotCommands {
++
++BotCommandResult executeCommand(const BotCommand& command, const BotCommandContext& context, char* output,
++                                size_t output_len) {
++  switch (command.id) {
++    case BOT_COMMAND_HELP:
++      return writeText(output, output_len, "Commands: !ping !test !hello !about !roll [d20|2d6] !status !channels");
++    case BOT_COMMAND_PING:
++      return writeText(output, output_len, "Pong!");
++    case BOT_COMMAND_TEST:
++      return writeText(output, output_len, "Bot test OK");
++    case BOT_COMMAND_HELLO:
++      return writeFormatted(output, output_len, "Hello from %s", context.node_name[0] ? context.node_name : "MeshCore bot");
++    case BOT_COMMAND_ABOUT:
++      return writeText(output, output_len, "Colorado Mesh firmware bot: local commands only, no internet required.");
++    case BOT_COMMAND_DICE:
++      return executeDice(command, context, output, output_len);
++    case BOT_COMMAND_STATUS:
++      return writeFormatted(output, output_len, "%s up %lus batt %umV storage %lu/%luKB seen %lu sent %lu fail %lu",
++                            context.node_name[0] ? context.node_name : "bot", (unsigned long)context.uptime_seconds,
++                            (unsigned)context.battery_millivolts, (unsigned long)context.storage_used_kb,
++                            (unsigned long)context.storage_total_kb, (unsigned long)context.observed_messages,
++                            (unsigned long)context.sent_messages, (unsigned long)context.send_failures);
++    case BOT_COMMAND_CHANNELS:
++      return writeFormatted(output, output_len, "Configured channels: %u. Normal bot replies: DM, #bot, #testing.",
++                            (unsigned)context.channel_count);
++    case BOT_COMMAND_UNKNOWN:
++      return writeText(output, output_len, "Unknown command. Try !help");
++    default:
++      return makeResult(BOT_COMMAND_RESULT_NOT_HANDLED, 0);
++  }
++}
++
++}
+diff --git a/examples/companion_radio/BotCommands.h b/examples/companion_radio/BotCommands.h
+new file mode 100644
+index 00000000..b0b4cddb
+--- /dev/null
++++ b/examples/companion_radio/BotCommands.h
+@@ -0,0 +1,10 @@
++#pragma once
++
++#include "BotTypes.h"
++
++namespace BotCommands {
++
++BotCommandResult executeCommand(const BotCommand& command, const BotCommandContext& context, char* output,
++                                size_t output_len);
++
++}
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index 869ae3ae..a7575a7c 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -9,6 +9,9 @@
+ #define BOT_MAX_COMMAND_ARGS_LEN 79
+ #define BOT_MAX_CHANNEL_NAME_LEN 23
+ #define BOT_MAX_SENDER_NAME_LEN 31
++#define BOT_GROUP_RESPONSE_PREFIX_RESERVE (BOT_MAX_SENDER_NAME_LEN + 2)
++#define BOT_MAX_GROUP_RESPONSE_LEN (BOT_MAX_TEXT_LEN - BOT_GROUP_RESPONSE_PREFIX_RESERVE)
++#define BOT_COMMAND_COOLDOWN_MILLIS 5000UL
+ #define BOT_SENDER_KEY_PREFIX_LEN 6
+ 
+ enum BotChannelKind : uint8_t {
+@@ -35,9 +38,17 @@ enum BotCommandId : uint8_t {
+   BOT_COMMAND_ABOUT,
+   BOT_COMMAND_DICE,
+   BOT_COMMAND_STATUS,
++  BOT_COMMAND_CHANNELS,
+   BOT_COMMAND_UNKNOWN
+ };
+ 
++enum BotCommandResultCode : uint8_t {
++  BOT_COMMAND_RESULT_NOT_HANDLED = 0,
++  BOT_COMMAND_RESULT_OK,
++  BOT_COMMAND_RESULT_TRUNCATED,
++  BOT_COMMAND_RESULT_NO_SPACE
++};
++
+ enum BotWriteResult : uint8_t {
+   BOT_WRITE_OK = 0,
+   BOT_WRITE_TRUNCATED,
+@@ -73,6 +84,31 @@ struct BotResponse {
+   bool truncated;
+ };
+ 
++struct BotCommandContext {
++  char node_name[BOT_MAX_SENDER_NAME_LEN + 1];
++  uint32_t uptime_seconds;
++  uint16_t battery_millivolts;
++  uint32_t storage_used_kb;
++  uint32_t storage_total_kb;
++  uint32_t observed_messages;
++  uint32_t ignored_messages;
++  uint32_t eligible_messages;
++  uint32_t sent_messages;
++  uint32_t send_failures;
++  uint32_t random_seed;
++  uint8_t channel_count;
++};
++
++struct BotCommandResult {
++  BotCommandResultCode code;
++  size_t text_len;
++};
++
++struct BotCommandCooldown {
++  BotCommandId command_id;
++  uint32_t expires_at_millis;
++};
++
+ struct BotPrefs {
+   bool enabled;
+   uint16_t normal_delay_ms;
+@@ -90,10 +126,15 @@ struct BotStats {
+   uint32_t eligible_messages;
+   uint32_t emergency_messages;
+   uint32_t parse_errors;
++  uint32_t sent_messages;
++  uint32_t send_failures;
+ };
+ 
+ static_assert(sizeof(BotMessage) <= 240, "BotMessage RAM budget exceeded");
+ static_assert(sizeof(BotCommand) <= 120, "BotCommand RAM budget exceeded");
+ static_assert(sizeof(BotResponse) <= 184, "BotResponse RAM budget exceeded");
++static_assert(sizeof(BotCommandContext) <= 96, "BotCommandContext RAM budget exceeded");
++static_assert(sizeof(BotCommandResult) <= 16, "BotCommandResult RAM budget exceeded");
++static_assert(sizeof(BotCommandCooldown) <= 8, "BotCommandCooldown RAM budget exceeded");
+ static_assert(sizeof(BotPrefs) <= 128, "BotPrefs RAM budget exceeded");
+-static_assert(sizeof(BotStats) <= 32, "BotStats RAM budget exceeded");
++static_assert(sizeof(BotStats) <= 48, "BotStats RAM budget exceeded");
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index 2d4b7395..78b66937 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -111,9 +111,44 @@ BotCommandId commandIdForName(const char* name, size_t len) {
+   if (namesEqual(name, len, "about")) return BOT_COMMAND_ABOUT;
+   if (namesEqual(name, len, "dice") || namesEqual(name, len, "roll")) return BOT_COMMAND_DICE;
+   if (namesEqual(name, len, "status")) return BOT_COMMAND_STATUS;
++  if (namesEqual(name, len, "channels")) return BOT_COMMAND_CHANNELS;
+   return BOT_COMMAND_UNKNOWN;
+ }
+ 
++size_t maxResponseLenForChannel(BotChannelKind channel_kind) {
++  return channel_kind == BOT_CHANNEL_DM ? BOT_MAX_RESPONSE_LEN : BOT_MAX_GROUP_RESPONSE_LEN;
++}
++
++bool isCommandOnCooldown(const BotCommandCooldown* cooldowns, size_t cooldown_count, BotCommandId command_id,
++                         uint32_t now_millis) {
++  if (!cooldowns || command_id == BOT_COMMAND_NONE) return false;
++  for (size_t i = 0; i < cooldown_count; i++) {
++    if (cooldowns[i].command_id == command_id && (int32_t)(cooldowns[i].expires_at_millis - now_millis) > 0) return true;
++  }
++  return false;
++}
++
++void recordCommandCooldown(BotCommandCooldown* cooldowns, size_t cooldown_count, BotCommandId command_id,
++                           uint32_t now_millis, uint32_t cooldown_millis) {
++  if (!cooldowns || cooldown_count == 0 || command_id == BOT_COMMAND_NONE || cooldown_millis == 0) return;
++
++  size_t slot = cooldown_count;
++  for (size_t i = 0; i < cooldown_count; i++) {
++    if (cooldowns[i].command_id == command_id) {
++      slot = i;
++      break;
++    }
++    if (slot == cooldown_count &&
++        (cooldowns[i].command_id == BOT_COMMAND_NONE || (int32_t)(cooldowns[i].expires_at_millis - now_millis) <= 0)) {
++      slot = i;
++    }
++  }
++  if (slot == cooldown_count) slot = 0;
++
++  cooldowns[slot].command_id = command_id;
++  cooldowns[slot].expires_at_millis = now_millis + cooldown_millis;
++}
++
+ bool parseCommand(const char* text, size_t text_len, BotCommand* command) {
+   if (!command) return false;
+   memset(command, 0, sizeof(*command));
+diff --git a/examples/companion_radio/FirmwareBot.h b/examples/companion_radio/FirmwareBot.h
+index 8b267b89..b718985f 100644
+--- a/examples/companion_radio/FirmwareBot.h
++++ b/examples/companion_radio/FirmwareBot.h
+@@ -11,5 +11,10 @@ bool splitChannelText(const char* text, size_t text_len, char* sender, size_t se
+ BotWriteResult writeResponse(char* output, size_t output_len, const char* text, size_t text_len, size_t* written);
+ BotFingerprint fingerprintFor(const BotMessage& message);
+ BotCommandId commandIdForName(const char* name, size_t len);
++size_t maxResponseLenForChannel(BotChannelKind channel_kind);
++bool isCommandOnCooldown(const BotCommandCooldown* cooldowns, size_t cooldown_count, BotCommandId command_id,
++                         uint32_t now_millis);
++void recordCommandCooldown(BotCommandCooldown* cooldowns, size_t cooldown_count, BotCommandId command_id,
++                           uint32_t now_millis, uint32_t cooldown_millis);
+ 
+ }
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 1596875a..72873d37 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -4,6 +4,7 @@
+ #include <Mesh.h>
+ 
+ #if CMESH_BOT_ENABLED
++#include "BotCommands.h"
+ #include "BotPolicy.h"
+ #include "FirmwareBot.h"
+ #endif
+@@ -567,10 +568,11 @@ void MyMesh::observeBotDirectMessage(const ContactInfo &from, uint32_t sender_ti
+   message.sender_timestamp = sender_timestamp;
+   FirmwareBot::normalizeText(text, botBoundedStrLen(text, BOT_MAX_TEXT_LEN), message.text, sizeof(message.text),
+                              &message.text_len);
+-  recordBotObservation(message);
++  recordBotObservation(message, &from, 0xFF);
+ }
+ 
+-void MyMesh::observeBotChannelMessage(const char *channel_name, const char *text, uint32_t sender_timestamp) {
++void MyMesh::observeBotChannelMessage(uint8_t channel_idx, const char *channel_name, const char *text,
++                                      uint32_t sender_timestamp) {
+   BotMessage message;
+   memset(&message, 0, sizeof(message));
+   size_t channel_len = botBoundedStrLen(channel_name, BOT_MAX_CHANNEL_NAME_LEN);
+@@ -585,10 +587,60 @@ void MyMesh::observeBotChannelMessage(const char *channel_name, const char *text
+   size_t body_len = botBoundedStrLen(text, BOT_MAX_TEXT_LEN);
+   FirmwareBot::splitChannelText(text, body_len, message.sender_name, sizeof(message.sender_name), &body, &body_len);
+   FirmwareBot::normalizeText(body, body_len, message.text, sizeof(message.text), &message.text_len);
+-  recordBotObservation(message);
++  recordBotObservation(message, NULL, channel_idx);
++}
++
++void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId command_id) {
++  memset(&context, 0, sizeof(context));
++  StrHelper::strzcpy(context.node_name, _prefs.node_name, sizeof(context.node_name));
++  context.uptime_seconds = _ms->getMillis() / 1000;
++  context.observed_messages = bot_stats.observed_messages;
++  context.ignored_messages = bot_stats.ignored_messages;
++  context.eligible_messages = bot_stats.eligible_messages;
++  context.sent_messages = bot_stats.sent_messages;
++  context.send_failures = bot_stats.send_failures;
++  if (command_id == BOT_COMMAND_DICE) {
++    getRNG()->random((uint8_t *)&context.random_seed, sizeof(context.random_seed));
++  }
++  if (command_id == BOT_COMMAND_STATUS) {
++    context.battery_millivolts = board.getBattMilliVolts();
++    context.storage_used_kb = _store->getStorageUsedKb();
++    context.storage_total_kb = _store->getStorageTotalKb();
++  }
++  if (command_id == BOT_COMMAND_CHANNELS) {
++    for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
++      ChannelDetails channel;
++      if (getChannel(i, channel) && channel.name[0]) context.channel_count++;
++    }
++  }
+ }
+ 
+-void MyMesh::recordBotObservation(const BotMessage &message) {
++bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
++                                const char *text, size_t text_len) {
++  for (size_t i = 0; i < BOT_PENDING_RESPONSE_SLOTS; i++) {
++    PendingBotResponse *pending = &pending_bot_responses[i];
++    if (!pending->active) {
++      pending->direct = message.channel_kind == BOT_CHANNEL_DM;
++      if (pending->direct) {
++        if (!direct_recipient) return false;
++        memcpy(pending->recipient_pub_key, direct_recipient->id.pub_key, sizeof(pending->recipient_pub_key));
++      } else {
++        memset(pending->recipient_pub_key, 0, sizeof(pending->recipient_pub_key));
++      }
++      pending->channel_idx = channel_idx;
++      pending->text_len = text_len;
++      size_t max_text_len = FirmwareBot::maxResponseLenForChannel(message.channel_kind);
++      if (pending->text_len > max_text_len) pending->text_len = max_text_len;
++      if (pending->text_len > 0) memcpy(pending->text, text, pending->text_len);
++      pending->text[pending->text_len] = 0;
++      pending->active = true;
++      return true;
++    }
++  }
++  return false;
++}
++
++void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx) {
+   bot_stats.observed_messages++;
+   BotPolicyDecision decision = BotPolicy::decide(message.channel_kind);
+   if (decision == BOT_POLICY_IGNORE) {
+@@ -601,10 +653,67 @@ void MyMesh::recordBotObservation(const BotMessage &message) {
+   }
+ 
+   BotCommand command;
+-  if (FirmwareBot::parseCommand(message.text, message.text_len, &command)) {
+-    bot_stats.eligible_messages++;
+-  } else if (message.text_len > 0 && (message.text[0] == '!' || message.text[0] == '/')) {
++  if (!FirmwareBot::parseCommand(message.text, message.text_len, &command)) {
++    if (message.text_len > 0 && (message.text[0] == '!' || message.text[0] == '/')) bot_stats.parse_errors++;
++    return;
++  }
++
++  if (FirmwareBot::isCommandOnCooldown(bot_command_cooldowns, BOT_COMMAND_COOLDOWN_SLOTS, command.id, _ms->getMillis())) {
++    bot_stats.ignored_messages++;
++    return;
++  }
++
++  BotCommandContext context;
++  buildBotCommandContext(context, command.id);
++  char response[BOT_MAX_RESPONSE_LEN + 1];
++  BotCommandResult result = BotCommands::executeCommand(command, context, response, sizeof(response));
++  if (result.code == BOT_COMMAND_RESULT_NOT_HANDLED || result.code == BOT_COMMAND_RESULT_NO_SPACE || result.text_len == 0) {
+     bot_stats.parse_errors++;
++    return;
++  }
++
++  bot_stats.eligible_messages++;
++  FirmwareBot::recordCommandCooldown(bot_command_cooldowns, BOT_COMMAND_COOLDOWN_SLOTS, command.id, _ms->getMillis(),
++                                     BOT_COMMAND_COOLDOWN_MILLIS);
++  if (!enqueueBotResponse(message, direct_recipient, channel_idx, response, result.text_len)) {
++    bot_stats.send_failures++;
++  }
++}
++
++void MyMesh::sendQueuedBotResponses() {
++  for (size_t i = 0; i < BOT_PENDING_RESPONSE_SLOTS; i++) {
++    PendingBotResponse *pending = &pending_bot_responses[i];
++    if (!pending->active) continue;
++
++    bool success = false;
++    if (pending->direct) {
++      ContactInfo *recipient = lookupContactByPubKey(pending->recipient_pub_key, PUB_KEY_SIZE);
++      if (recipient) {
++        uint32_t expected_ack = 0;
++        uint32_t est_timeout = 0;
++        uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
++        int result = sendMessage(*recipient, timestamp, 0, pending->text, expected_ack, est_timeout);
++        success = result != MSG_SEND_FAILED;
++        if (success && expected_ack) {
++          expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();
++          expected_ack_table[next_ack_idx].ack = expected_ack;
++          expected_ack_table[next_ack_idx].contact = recipient;
++          next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
++        }
++      }
++    } else if (pending->channel_idx != 0xFF) {
++      ChannelDetails channel;
++      uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
++      success = getChannel(pending->channel_idx, channel) &&
++                sendGroupMessage(timestamp, channel.channel, _prefs.node_name, pending->text, pending->text_len);
++    }
++
++    if (success) {
++      bot_stats.sent_messages++;
++    } else {
++      bot_stats.send_failures++;
++    }
++    pending->active = false;
+   }
+ }
+ 
+@@ -636,6 +745,7 @@ void MyMesh::scheduleBotFloodAdvert(unsigned long interval_millis) {
+ }
+ 
+ void MyMesh::tickBot() {
++  sendQueuedBotResponses();
+   if (next_bot_local_advert && millisHasNowPassed(next_bot_local_advert)) {
+     sendBotSelfAdvert(false);
+     scheduleBotLocalAdvert(BOT_AUTO_ADVERT_INTERVAL_MILLIS);
+@@ -692,7 +802,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
+   if (_ui) _ui->newMsg(path_len, channel_name, text, offline_queue_len);
+ #endif
+ #if CMESH_BOT_ENABLED
+-  observeBotChannelMessage(channel_name, text, timestamp);
++  observeBotChannelMessage(channel_idx, channel_name, text, timestamp);
+ #endif
+ }
+ 
+@@ -977,6 +1087,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
+   memset(send_scope.key, 0, sizeof(send_scope.key));
+ #if CMESH_BOT_ENABLED
+   memset(&bot_stats, 0, sizeof(bot_stats));
++  memset(pending_bot_responses, 0, sizeof(pending_bot_responses));
++  memset(bot_command_cooldowns, 0, sizeof(bot_command_cooldowns));
+   next_bot_local_advert = 0;
+   next_bot_flood_advert = 0;
+ #endif
+@@ -992,6 +1104,9 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
+   _prefs.tx_power_dbm = LORA_TX_POWER;
+   _prefs.gps_enabled = 0;       // GPS disabled by default
+   _prefs.gps_interval = 0;      // No automatic GPS updates by default
++#if CMESH_BOT_ENABLED
++  _prefs.path_hash_mode = 1;
++#endif
+   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
+ #if defined(USE_SX1262) || defined(USE_SX1268)
+ #ifdef SX126X_RX_BOOSTED_GAIN
+diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
+index dc375c5b..ed915b28 100644
+--- a/examples/companion_radio/MyMesh.h
++++ b/examples/companion_radio/MyMesh.h
+@@ -9,6 +9,8 @@
+ #endif
+ #if CMESH_BOT_ENABLED
+ #include "BotTypes.h"
++#define BOT_PENDING_RESPONSE_SLOTS 2
++#define BOT_COMMAND_COOLDOWN_SLOTS 9
+ #endif
+ 
+ /*------------ Frame Protocol --------------*/
+@@ -202,8 +204,13 @@ private:
+ #if CMESH_BOT_ENABLED
+   void observeBotDirectMessage(const ContactInfo &from, uint32_t sender_timestamp, const uint8_t *sender_prefix,
+                                size_t sender_prefix_len, const char *text);
+-  void observeBotChannelMessage(const char *channel_name, const char *text, uint32_t sender_timestamp);
+-  void recordBotObservation(const BotMessage &message);
++  void observeBotChannelMessage(uint8_t channel_idx, const char *channel_name, const char *text,
++                                uint32_t sender_timestamp);
++  void recordBotObservation(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx);
++  void buildBotCommandContext(BotCommandContext &context, BotCommandId command_id);
++  bool enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
++                          const char *text, size_t text_len);
++  void sendQueuedBotResponses();
+   void tickBot();
+   void scheduleBotLocalAdvert(unsigned long interval_millis);
+   void scheduleBotFloodAdvert(unsigned long interval_millis);
+@@ -242,7 +249,18 @@ private:
+   TransportKey send_scope;
+ 
+ #if CMESH_BOT_ENABLED
++  struct PendingBotResponse {
++    bool active;
++    bool direct;
++    uint8_t recipient_pub_key[PUB_KEY_SIZE];
++    uint8_t channel_idx;
++    char text[BOT_MAX_RESPONSE_LEN + 1];
++    size_t text_len;
++  };
++
+   BotStats bot_stats;
++  PendingBotResponse pending_bot_responses[BOT_PENDING_RESPONSE_SLOTS];
++  BotCommandCooldown bot_command_cooldowns[BOT_COMMAND_COOLDOWN_SLOTS];
+   unsigned long next_bot_local_advert;
+   unsigned long next_bot_flood_advert;
+ #endif

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "BotCommands.h"
 #include "BotPolicy.h"
 #include "FirmwareBot.h"
 
@@ -87,6 +88,15 @@ static void test_parse_command() {
   assert(command.id == BOT_COMMAND_HELP);
   assert(strcmp(command.args, "please") == 0);
 
+  assert(FirmwareBot::parseCommand("!channels", 9, &command));
+  assert(command.id == BOT_COMMAND_CHANNELS);
+
+  assert(FirmwareBot::parseCommand("!commands", 9, &command));
+  assert(command.id == BOT_COMMAND_HELP);
+
+  assert(FirmwareBot::parseCommand("!hi", 3, &command));
+  assert(command.id == BOT_COMMAND_HELLO);
+
   assert(FirmwareBot::parseCommand("!wat", 4, &command));
   assert(command.id == BOT_COMMAND_UNKNOWN);
 
@@ -122,6 +132,133 @@ static BotMessage make_message(const char* channel, const char* text) {
   return message;
 }
 
+static BotCommandContext make_context() {
+  BotCommandContext context;
+  memset(&context, 0, sizeof(context));
+  strncpy(context.node_name, "cm-bot", sizeof(context.node_name) - 1);
+  context.uptime_seconds = 1234;
+  context.battery_millivolts = 4180;
+  context.storage_used_kb = 12;
+  context.storage_total_kb = 128;
+  context.observed_messages = 9;
+  context.ignored_messages = 2;
+  context.eligible_messages = 5;
+  context.sent_messages = 4;
+  context.send_failures = 1;
+  context.random_seed = 0x12345678;
+  context.channel_count = 4;
+  return context;
+}
+
+static BotCommandResult run_command(const char* text, char* output, size_t output_len) {
+  BotCommand command;
+  assert(FirmwareBot::parseCommand(text, strlen(text), &command));
+  BotCommandContext context = make_context();
+  return BotCommands::executeCommand(command, context, output, output_len);
+}
+
+static void test_command_outputs() {
+  char out[BOT_MAX_RESPONSE_LEN + 1];
+  BotCommandResult result = run_command("!ping", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Pong!") == 0);
+  assert(result.text_len == strlen(out));
+
+  result = run_command("!test", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Bot test OK") == 0);
+
+  result = run_command("!hello", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Hello from cm-bot") == 0);
+
+  result = run_command("!about", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strstr(out, "Colorado Mesh firmware bot") != NULL);
+
+  result = run_command("!help", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strstr(out, "!ping") != NULL);
+  assert(strstr(out, "!channels") != NULL);
+
+  result = run_command("!channels", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Configured channels: 4. Normal bot replies: DM, #bot, #testing.") == 0);
+
+  result = run_command("!status", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strstr(out, "cm-bot up 1234s") != NULL);
+  assert(strstr(out, "batt 4180mV") != NULL);
+  assert(strstr(out, "sent 4 fail 1") != NULL);
+
+  result = run_command("!wat", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Unknown command. Try !help") == 0);
+}
+
+static void test_dice_command() {
+  char out[BOT_MAX_RESPONSE_LEN + 1];
+  BotCommandResult result = run_command("!roll", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strncmp(out, "Rolled d6: ", 11) == 0);
+
+  result = run_command("!roll d20", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strncmp(out, "Rolled d20: ", 12) == 0);
+
+  result = run_command("!roll 2d6", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strncmp(out, "Rolled 2d6: ", 12) == 0);
+  assert(strchr(out, '+') != NULL);
+  assert(strchr(out, '=') != NULL);
+
+  result = run_command("!roll d7", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strncmp(out, "Usage: !roll", 12) == 0);
+
+  result = run_command("!roll 0d6", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strncmp(out, "Usage: !roll", 12) == 0);
+
+  result = run_command("!roll 11d6", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strncmp(out, "Usage: !roll", 12) == 0);
+}
+
+static void test_command_truncation() {
+  char out[12];
+  BotCommandResult result = run_command("!about", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_TRUNCATED);
+  assert(strcmp(out, "Colorado Me") == 0);
+  assert(result.text_len == strlen(out));
+
+  result = run_command("!ping", NULL, 0);
+  assert(result.code == BOT_COMMAND_RESULT_NO_SPACE);
+  assert(result.text_len == 0);
+}
+
+static void test_command_cooldown() {
+  BotCommandCooldown cooldowns[2];
+  memset(cooldowns, 0, sizeof(cooldowns));
+  assert(!FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_PING, 1000));
+  FirmwareBot::recordCommandCooldown(cooldowns, 2, BOT_COMMAND_PING, 1000, 5000);
+  assert(FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_PING, 5999));
+  assert(!FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_PING, 6000));
+  assert(!FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_STATUS, 2000));
+
+  FirmwareBot::recordCommandCooldown(cooldowns, 2, BOT_COMMAND_STATUS, 0xFFFFFFF0UL, 32);
+  assert(FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_STATUS, 0xFFFFFFF8UL));
+  assert(!FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_STATUS, 0x00000010UL));
+}
+
+static void test_group_response_cap() {
+  assert(BOT_MAX_GROUP_RESPONSE_LEN == BOT_MAX_TEXT_LEN - BOT_GROUP_RESPONSE_PREFIX_RESERVE);
+  assert(FirmwareBot::maxResponseLenForChannel(BOT_CHANNEL_DM) == BOT_MAX_RESPONSE_LEN);
+  assert(FirmwareBot::maxResponseLenForChannel(BOT_CHANNEL_BOT) == BOT_MAX_GROUP_RESPONSE_LEN);
+  assert(FirmwareBot::maxResponseLenForChannel(BOT_CHANNEL_TESTING) == BOT_MAX_GROUP_RESPONSE_LEN);
+  assert(BOT_MAX_GROUP_RESPONSE_LEN < BOT_MAX_RESPONSE_LEN);
+}
+
 static void test_fingerprint() {
   BotMessage a = make_message("#bot", "!PING");
   BotMessage b = make_message("bot", "!ping");
@@ -142,6 +279,11 @@ int main() {
   test_normalize_truncation();
   test_parse_command();
   test_response_write();
+  test_command_outputs();
+  test_dice_command();
+  test_command_truncation();
+  test_command_cooldown();
+  test_group_response_cap();
   test_fingerprint();
   printf("firmware_bot tests passed\n");
   return 0;
