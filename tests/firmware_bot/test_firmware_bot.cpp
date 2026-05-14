@@ -8,14 +8,20 @@
 static void test_channel_policy() {
   assert(BotPolicy::classifyChannel(NULL, 0, true) == BOT_CHANNEL_DM);
   assert(BotPolicy::decide(BOT_CHANNEL_DM) == BOT_POLICY_ALLOW_NORMAL);
+  assert(BotPolicy::isNormalAllowed(BOT_CHANNEL_DM));
   assert(BotPolicy::classifyChannel("Public", 6, false) == BOT_CHANNEL_PUBLIC);
   assert(BotPolicy::decide(BOT_CHANNEL_PUBLIC) == BOT_POLICY_IGNORE);
+  assert(!BotPolicy::isNormalAllowed(BOT_CHANNEL_PUBLIC));
   assert(BotPolicy::classifyChannel("#bot", 4, false) == BOT_CHANNEL_BOT);
   assert(BotPolicy::decide(BOT_CHANNEL_BOT) == BOT_POLICY_ALLOW_NORMAL);
+  assert(BotPolicy::isNormalAllowed(BOT_CHANNEL_BOT));
   assert(BotPolicy::classifyChannel("testing", 7, false) == BOT_CHANNEL_TESTING);
   assert(BotPolicy::decide(BOT_CHANNEL_TESTING) == BOT_POLICY_ALLOW_NORMAL);
+  assert(BotPolicy::isNormalAllowed(BOT_CHANNEL_TESTING));
   assert(BotPolicy::classifyChannel("#emergency", 10, false) == BOT_CHANNEL_EMERGENCY);
   assert(BotPolicy::decide(BOT_CHANNEL_EMERGENCY) == BOT_POLICY_EMERGENCY_FORWARD);
+  assert(BotPolicy::isEmergency(BOT_CHANNEL_EMERGENCY));
+  assert(!BotPolicy::isNormalAllowed(BOT_CHANNEL_EMERGENCY));
   assert(BotPolicy::classifyChannel("#botnet", 7, false) == BOT_CHANNEL_OTHER);
   assert(BotPolicy::decide(BOT_CHANNEL_OTHER) == BOT_POLICY_IGNORE);
 }
@@ -56,6 +62,15 @@ static void test_normalize_truncation() {
 }
 
 static void test_parse_command() {
+  const char* body = NULL;
+  size_t body_len = 0;
+  char sender[BOT_MAX_SENDER_NAME_LEN + 1];
+  assert(FirmwareBot::splitChannelText("alice: !ping", 12, sender, sizeof(sender), &body, &body_len));
+  assert(strcmp(sender, "alice") == 0);
+  assert(body_len == 5);
+  assert(strncmp(body, "!ping", body_len) == 0);
+  assert(!FirmwareBot::splitChannelText("alice says !ping", 16, sender, sizeof(sender), &body, &body_len));
+
   BotCommand command;
   assert(!FirmwareBot::parseCommand("hello bot", 9, &command));
   assert(FirmwareBot::parseCommand("!PING", 5, &command));
