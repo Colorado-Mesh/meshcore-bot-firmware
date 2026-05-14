@@ -23,6 +23,7 @@ def main():
         str(SRC_DIR / "FirmwareBot.cpp"),
         str(SRC_DIR / "BotPolicy.cpp"),
         str(SRC_DIR / "BotCommands.cpp"),
+        str(SRC_DIR / "EmergencyForwarder.cpp"),
         "-o",
         str(binary),
     ]

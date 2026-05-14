@@ -4,6 +4,7 @@
 
 #include "BotCommands.h"
 #include "BotPolicy.h"
+#include "EmergencyForwarder.h"
 #include "FirmwareBot.h"
 
 static void test_channel_policy() {
@@ -11,6 +12,8 @@ static void test_channel_policy() {
   assert(BotPolicy::decide(BOT_CHANNEL_DM) == BOT_POLICY_ALLOW_NORMAL);
   assert(BotPolicy::isNormalAllowed(BOT_CHANNEL_DM));
   assert(BotPolicy::classifyChannel("Public", 6, false) == BOT_CHANNEL_PUBLIC);
+  assert(BotPolicy::classifyChannel("public", 6, false) == BOT_CHANNEL_OTHER);
+  assert(BotPolicy::classifyChannel("#Public", 7, false) == BOT_CHANNEL_OTHER);
   assert(BotPolicy::decide(BOT_CHANNEL_PUBLIC) == BOT_POLICY_IGNORE);
   assert(!BotPolicy::isNormalAllowed(BOT_CHANNEL_PUBLIC));
   assert(BotPolicy::classifyChannel("#bot", 4, false) == BOT_CHANNEL_BOT);
@@ -20,6 +23,8 @@ static void test_channel_policy() {
   assert(BotPolicy::decide(BOT_CHANNEL_TESTING) == BOT_POLICY_ALLOW_NORMAL);
   assert(BotPolicy::isNormalAllowed(BOT_CHANNEL_TESTING));
   assert(BotPolicy::classifyChannel("#emergency", 10, false) == BOT_CHANNEL_EMERGENCY);
+  assert(BotPolicy::classifyChannel("emergency", 9, false) == BOT_CHANNEL_OTHER);
+  assert(BotPolicy::classifyChannel("#Emergency", 10, false) == BOT_CHANNEL_OTHER);
   assert(BotPolicy::decide(BOT_CHANNEL_EMERGENCY) == BOT_POLICY_EMERGENCY_FORWARD);
   assert(BotPolicy::isEmergency(BOT_CHANNEL_EMERGENCY));
   assert(!BotPolicy::isNormalAllowed(BOT_CHANNEL_EMERGENCY));
@@ -259,6 +264,62 @@ static void test_group_response_cap() {
   assert(BOT_MAX_GROUP_RESPONSE_LEN < BOT_MAX_RESPONSE_LEN);
 }
 
+static void test_emergency_forward_short() {
+  BotMessage message = make_message("#emergency", "need help at trailhead");
+  BotEmergencyForward forward;
+  assert(EmergencyForwarder::format(message, forward));
+  assert(forward.part_count == 1);
+  assert(!forward.truncated);
+  assert(strstr(forward.parts[0], "EMERGENCY MESSAGE FROM alice: need help at trailhead") == forward.parts[0]);
+  assert(forward.part_lens[0] == strlen(forward.parts[0]));
+}
+
+static void test_emergency_forward_loop_prevention() {
+  assert(EmergencyForwarder::isForwardedEmergencyText("EMERGENCY MESSAGE FROM alice: need help", 39));
+  assert(!EmergencyForwarder::isForwardedEmergencyText("FYI EMERGENCY MESSAGE FROM alice", 32));
+
+  BotMessage message = make_message("#emergency", "EMERGENCY MESSAGE FROM alice: need help");
+  BotEmergencyForward forward;
+  assert(!EmergencyForwarder::format(message, forward));
+
+  BotMessage public_message = make_message("Public", "!ping");
+  assert(!EmergencyForwarder::format(public_message, forward));
+}
+
+static void test_emergency_forward_multipart() {
+  BotMessage message = make_message("#emergency", "short");
+  memset(message.text, 'a', sizeof(message.text));
+  message.text[BOT_MAX_TEXT_LEN] = 0;
+  message.text_len = BOT_MAX_TEXT_LEN;
+
+  BotEmergencyForward forward;
+  assert(EmergencyForwarder::format(message, forward));
+  assert(forward.part_count > 1);
+  assert(forward.part_count <= BOT_EMERGENCY_MAX_PARTS);
+  assert(!forward.truncated);
+  for (uint8_t i = 0; i < forward.part_count; i++) {
+    assert(strstr(forward.parts[i], "EMERGENCY MESSAGE FROM alice: ") == forward.parts[i]);
+    assert(strstr(forward.parts[i], "[") != NULL);
+    assert(forward.part_lens[i] <= BOT_MAX_GROUP_RESPONSE_LEN);
+  }
+}
+
+static void test_emergency_forward_truncation() {
+  BotMessage message = make_message("#emergency", "short");
+  memset(message.sender_name, 's', sizeof(message.sender_name) - 1);
+  message.sender_name[sizeof(message.sender_name) - 1] = 0;
+  memset(message.text, 'b', sizeof(message.text));
+  message.text[BOT_MAX_TEXT_LEN] = 0;
+  message.text_len = BOT_MAX_TEXT_LEN;
+  message.text_truncated = true;
+
+  BotEmergencyForward forward;
+  assert(EmergencyForwarder::format(message, forward));
+  assert(forward.truncated);
+  assert(forward.part_count == BOT_EMERGENCY_MAX_PARTS);
+  assert(strstr(forward.parts[forward.part_count - 1], "...") != NULL);
+}
+
 static void test_fingerprint() {
   BotMessage a = make_message("#bot", "!PING");
   BotMessage b = make_message("bot", "!ping");
@@ -284,6 +345,10 @@ int main() {
   test_command_truncation();
   test_command_cooldown();
   test_group_response_cap();
+  test_emergency_forward_short();
+  test_emergency_forward_loop_prevention();
+  test_emergency_forward_multipart();
+  test_emergency_forward_truncation();
   test_fingerprint();
   printf("firmware_bot tests passed\n");
   return 0;

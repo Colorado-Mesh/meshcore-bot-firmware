@@ -1,0 +1,419 @@
+diff --git a/examples/companion_radio/BotPolicy.cpp b/examples/companion_radio/BotPolicy.cpp
+index bd3fc6c7..1cf75c73 100644
+--- a/examples/companion_radio/BotPolicy.cpp
++++ b/examples/companion_radio/BotPolicy.cpp
+@@ -26,16 +26,26 @@ bool equalsIgnoreCase(const char* value, size_t len, const char* expected) {
+   return true;
+ }
+ 
++bool equalsExact(const char* value, size_t len, const char* expected) {
++  if (!value || !expected) return false;
++  size_t expected_len = strlen(expected);
++  if (len != expected_len) return false;
++  for (size_t i = 0; i < len; i++) {
++    if (value[i] != expected[i]) return false;
++  }
++  return true;
++}
++
+ }
+ 
+ namespace BotPolicy {
+ 
+ BotChannelKind classifyChannel(const char* name, size_t len, bool direct_message) {
+   if (direct_message) return BOT_CHANNEL_DM;
+-  if (equalsIgnoreCase(name, len, "Public")) return BOT_CHANNEL_PUBLIC;
++  if (equalsExact(name, len, "Public")) return BOT_CHANNEL_PUBLIC;
+   if (equalsIgnoreCase(name, len, "#bot")) return BOT_CHANNEL_BOT;
+   if (equalsIgnoreCase(name, len, "#testing")) return BOT_CHANNEL_TESTING;
+-  if (equalsIgnoreCase(name, len, "#emergency")) return BOT_CHANNEL_EMERGENCY;
++  if (equalsExact(name, len, "#emergency")) return BOT_CHANNEL_EMERGENCY;
+   return BOT_CHANNEL_OTHER;
+ }
+ 
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index a7575a7c..1e6f72c1 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -12,6 +12,11 @@
+ #define BOT_GROUP_RESPONSE_PREFIX_RESERVE (BOT_MAX_SENDER_NAME_LEN + 2)
+ #define BOT_MAX_GROUP_RESPONSE_LEN (BOT_MAX_TEXT_LEN - BOT_GROUP_RESPONSE_PREFIX_RESERVE)
+ #define BOT_COMMAND_COOLDOWN_MILLIS 5000UL
++#define BOT_EMERGENCY_PREFIX "EMERGENCY MESSAGE FROM "
++#define BOT_EMERGENCY_MAX_PARTS 3
++#define BOT_EMERGENCY_RATE_LIMIT_MILLIS 60000UL
++#define BOT_EMERGENCY_RATE_LIMIT_COUNT 3
++#define BOT_PENDING_EMERGENCY_SLOTS BOT_EMERGENCY_MAX_PARTS
+ #define BOT_SENDER_KEY_PREFIX_LEN 6
+ 
+ enum BotChannelKind : uint8_t {
+@@ -64,6 +69,7 @@ struct BotMessage {
+   char channel_name[BOT_MAX_CHANNEL_NAME_LEN + 1];
+   char sender_name[BOT_MAX_SENDER_NAME_LEN + 1];
+   uint8_t sender_key_prefix[BOT_SENDER_KEY_PREFIX_LEN];
++  bool text_truncated;
+   uint32_t sender_timestamp;
+   char text[BOT_MAX_TEXT_LEN + 1];
+   size_t text_len;
+@@ -109,6 +115,13 @@ struct BotCommandCooldown {
+   uint32_t expires_at_millis;
+ };
+ 
++struct BotEmergencyForward {
++  uint8_t part_count;
++  bool truncated;
++  char parts[BOT_EMERGENCY_MAX_PARTS][BOT_MAX_GROUP_RESPONSE_LEN + 1];
++  size_t part_lens[BOT_EMERGENCY_MAX_PARTS];
++};
++
+ struct BotPrefs {
+   bool enabled;
+   uint16_t normal_delay_ms;
+@@ -125,6 +138,8 @@ struct BotStats {
+   uint32_t ignored_messages;
+   uint32_t eligible_messages;
+   uint32_t emergency_messages;
++  uint32_t emergency_forwards;
++  uint32_t emergency_forward_failures;
+   uint32_t parse_errors;
+   uint32_t sent_messages;
+   uint32_t send_failures;
+@@ -136,5 +151,6 @@ static_assert(sizeof(BotResponse) <= 184, "BotResponse RAM budget exceeded");
+ static_assert(sizeof(BotCommandContext) <= 96, "BotCommandContext RAM budget exceeded");
+ static_assert(sizeof(BotCommandResult) <= 16, "BotCommandResult RAM budget exceeded");
+ static_assert(sizeof(BotCommandCooldown) <= 8, "BotCommandCooldown RAM budget exceeded");
++static_assert(sizeof(BotEmergencyForward) <= 480, "BotEmergencyForward RAM budget exceeded");
+ static_assert(sizeof(BotPrefs) <= 128, "BotPrefs RAM budget exceeded");
+ static_assert(sizeof(BotStats) <= 48, "BotStats RAM budget exceeded");
+diff --git a/examples/companion_radio/EmergencyForwarder.cpp b/examples/companion_radio/EmergencyForwarder.cpp
+new file mode 100644
+index 00000000..b228a8fa
+--- /dev/null
++++ b/examples/companion_radio/EmergencyForwarder.cpp
+@@ -0,0 +1,118 @@
++#include "EmergencyForwarder.h"
++
++#include <stdio.h>
++#include <string.h>
++
++namespace {
++
++size_t boundedStrLen(const char* value, size_t max_len) {
++  size_t len = 0;
++  while (value && len < max_len && value[len] != 0) len++;
++  return len;
++}
++
++bool prefixEqual(const char* text, size_t text_len, const char* prefix) {
++  size_t prefix_len = strlen(prefix);
++  if (text_len < prefix_len) return false;
++  for (size_t i = 0; i < prefix_len; i++) {
++    if (text[i] != prefix[i]) return false;
++  }
++  return true;
++}
++
++size_t appendText(char* output, size_t output_len, size_t pos, const char* text, size_t text_len) {
++  if (!output || output_len == 0) return 0;
++  while (pos + 1 < output_len && text_len > 0) {
++    output[pos++] = *text++;
++    text_len--;
++  }
++  output[pos] = 0;
++  return pos;
++}
++
++size_t appendRepeated(char* output, size_t output_len, size_t pos, char ch, size_t count) {
++  while (pos + 1 < output_len && count > 0) {
++    output[pos++] = ch;
++    count--;
++  }
++  output[pos] = 0;
++  return pos;
++}
++
++void writePart(BotEmergencyForward& forward, uint8_t part_idx, const char* header, size_t header_len,
++               const char* text, size_t text_len, bool multipart) {
++  char* output = forward.parts[part_idx];
++  size_t output_len = sizeof(forward.parts[part_idx]);
++  output[0] = 0;
++  size_t pos = appendText(output, output_len, 0, header, header_len);
++
++  if (multipart) {
++    char marker[8];
++    int n = snprintf(marker, sizeof(marker), "[%u/%u] ", (unsigned)(part_idx + 1), (unsigned)forward.part_count);
++    if (n > 0) pos = appendText(output, output_len, pos, marker, (size_t)n);
++  }
++
++  pos = appendText(output, output_len, pos, text, text_len);
++  forward.part_lens[part_idx] = pos;
++}
++
++}
++
++namespace EmergencyForwarder {
++
++bool isForwardedEmergencyText(const char* text, size_t text_len) {
++  if (!text) return false;
++  size_t len = boundedStrLen(text, text_len);
++  return prefixEqual(text, len, BOT_EMERGENCY_PREFIX);
++}
++
++bool format(const BotMessage& message, BotEmergencyForward& forward) {
++  memset(&forward, 0, sizeof(forward));
++  if (message.channel_kind != BOT_CHANNEL_EMERGENCY) return false;
++  if (isForwardedEmergencyText(message.text, message.text_len)) return false;
++
++  char header[BOT_MAX_GROUP_RESPONSE_LEN + 1];
++  const char* sender = message.sender_name[0] ? message.sender_name : "unknown";
++  int header_len_int = snprintf(header, sizeof(header), BOT_EMERGENCY_PREFIX "%s: ", sender);
++  if (header_len_int < 0) return false;
++  size_t header_len = (size_t)header_len_int;
++  if (header_len >= sizeof(header)) header_len = sizeof(header) - 1;
++  if (header_len >= BOT_MAX_GROUP_RESPONSE_LEN) return false;
++
++  size_t text_len = boundedStrLen(message.text, message.text_len);
++  size_t one_part_capacity = BOT_MAX_GROUP_RESPONSE_LEN - header_len;
++  if (text_len <= one_part_capacity) {
++    forward.part_count = 1;
++    forward.truncated = message.text_truncated;
++    writePart(forward, 0, header, header_len, message.text, text_len, false);
++    return true;
++  }
++
++  size_t multipart_header_extra = 6;
++  if (header_len + multipart_header_extra >= BOT_MAX_GROUP_RESPONSE_LEN) return false;
++  size_t part_capacity = BOT_MAX_GROUP_RESPONSE_LEN - header_len - multipart_header_extra;
++  size_t needed_parts = (text_len + part_capacity - 1) / part_capacity;
++  forward.part_count = needed_parts > BOT_EMERGENCY_MAX_PARTS ? BOT_EMERGENCY_MAX_PARTS : (uint8_t)needed_parts;
++  forward.truncated = message.text_truncated || needed_parts > BOT_EMERGENCY_MAX_PARTS;
++
++  size_t offset = 0;
++  for (uint8_t i = 0; i < forward.part_count; i++) {
++    size_t chunk_len = text_len - offset;
++    if (chunk_len > part_capacity) chunk_len = part_capacity;
++    writePart(forward, i, header, header_len, &message.text[offset], chunk_len, true);
++    offset += chunk_len;
++  }
++
++  if (forward.truncated && forward.part_count > 0) {
++    uint8_t last = forward.part_count - 1;
++    size_t pos = forward.part_lens[last];
++    if (pos > 3) pos -= 3;
++    forward.parts[last][pos] = 0;
++    pos = appendRepeated(forward.parts[last], sizeof(forward.parts[last]), pos, '.', 3);
++    forward.part_lens[last] = pos;
++  }
++
++  return forward.part_count > 0;
++}
++
++}
+diff --git a/examples/companion_radio/EmergencyForwarder.h b/examples/companion_radio/EmergencyForwarder.h
+new file mode 100644
+index 00000000..e59d29e2
+--- /dev/null
++++ b/examples/companion_radio/EmergencyForwarder.h
+@@ -0,0 +1,10 @@
++#pragma once
++
++#include "BotTypes.h"
++
++namespace EmergencyForwarder {
++
++bool isForwardedEmergencyText(const char* text, size_t text_len);
++bool format(const BotMessage& message, BotEmergencyForward& forward);
++
++}
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 72873d37..ad72ccc5 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -6,6 +6,7 @@
+ #if CMESH_BOT_ENABLED
+ #include "BotCommands.h"
+ #include "BotPolicy.h"
++#include "EmergencyForwarder.h"
+ #include "FirmwareBot.h"
+ #endif
+ 
+@@ -566,8 +567,8 @@ void MyMesh::observeBotDirectMessage(const ContactInfo &from, uint32_t sender_ti
+   if (prefix_len > sizeof(message.sender_key_prefix)) prefix_len = sizeof(message.sender_key_prefix);
+   if (sender_prefix && prefix_len > 0) memcpy(message.sender_key_prefix, sender_prefix, prefix_len);
+   message.sender_timestamp = sender_timestamp;
+-  FirmwareBot::normalizeText(text, botBoundedStrLen(text, BOT_MAX_TEXT_LEN), message.text, sizeof(message.text),
+-                             &message.text_len);
++  message.text_truncated = FirmwareBot::normalizeText(text, botBoundedStrLen(text, BOT_MAX_TEXT_LEN + 1), message.text,
++                                                       sizeof(message.text), &message.text_len) == BOT_WRITE_TRUNCATED;
+   recordBotObservation(message, &from, 0xFF);
+ }
+ 
+@@ -586,7 +587,8 @@ void MyMesh::observeBotChannelMessage(uint8_t channel_idx, const char *channel_n
+   const char *body = text;
+   size_t body_len = botBoundedStrLen(text, BOT_MAX_TEXT_LEN);
+   FirmwareBot::splitChannelText(text, body_len, message.sender_name, sizeof(message.sender_name), &body, &body_len);
+-  FirmwareBot::normalizeText(body, body_len, message.text, sizeof(message.text), &message.text_len);
++  message.text_truncated = FirmwareBot::normalizeText(body, body_len, message.text, sizeof(message.text),
++                                                       &message.text_len) == BOT_WRITE_TRUNCATED;
+   recordBotObservation(message, NULL, channel_idx);
+ }
+ 
+@@ -640,6 +642,63 @@ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *di
+   return false;
+ }
+ 
++bool MyMesh::findBotChannel(BotChannelKind kind, uint8_t &channel_idx) {
++  for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
++    ChannelDetails channel;
++    if (getChannel(i, channel)) {
++      size_t name_len = botBoundedStrLen(channel.name, BOT_MAX_CHANNEL_NAME_LEN);
++      if (BotPolicy::classifyChannel(channel.name, name_len, false) == kind) {
++        channel_idx = i;
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
++bool MyMesh::isEmergencyRateLimited() {
++  unsigned long now = _ms->getMillis();
++  if (!emergency_rate_window_started || millisHasNowPassed(emergency_rate_window_started + BOT_EMERGENCY_RATE_LIMIT_MILLIS)) {
++    emergency_rate_window_started = now;
++    emergency_rate_count = 0;
++    return false;
++  }
++  return emergency_rate_count >= BOT_EMERGENCY_RATE_LIMIT_COUNT;
++}
++
++void MyMesh::recordEmergencyRateLimitEvent() {
++  if (emergency_rate_count < 0xFF) emergency_rate_count++;
++}
++
++bool MyMesh::enqueueEmergencyForward(const BotMessage &message) {
++  if (isEmergencyRateLimited()) return false;
++
++  BotEmergencyForward forward;
++  if (!EmergencyForwarder::format(message, forward)) return false;
++
++  uint8_t free_slots = 0;
++  for (size_t i = 0; i < BOT_PENDING_EMERGENCY_SLOTS; i++) {
++    if (!pending_emergency_forwards[i].active) free_slots++;
++  }
++  if (free_slots < forward.part_count) return false;
++
++  uint8_t part_idx = 0;
++  for (size_t i = 0; i < BOT_PENDING_EMERGENCY_SLOTS && part_idx < forward.part_count; i++) {
++    PendingEmergencyForward *pending = &pending_emergency_forwards[i];
++    if (!pending->active) {
++      pending->text_len = forward.part_lens[part_idx];
++      if (pending->text_len > BOT_MAX_GROUP_RESPONSE_LEN) pending->text_len = BOT_MAX_GROUP_RESPONSE_LEN;
++      if (pending->text_len > 0) memcpy(pending->text, forward.parts[part_idx], pending->text_len);
++      pending->text[pending->text_len] = 0;
++      pending->active = true;
++      part_idx++;
++    }
++  }
++
++  recordEmergencyRateLimitEvent();
++  return true;
++}
++
+ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx) {
+   bot_stats.observed_messages++;
+   BotPolicyDecision decision = BotPolicy::decide(message.channel_kind);
+@@ -649,6 +708,7 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+   }
+   if (decision == BOT_POLICY_EMERGENCY_FORWARD) {
+     bot_stats.emergency_messages++;
++    if (!enqueueEmergencyForward(message)) bot_stats.emergency_forward_failures++;
+     return;
+   }
+ 
+@@ -717,6 +777,31 @@ void MyMesh::sendQueuedBotResponses() {
+   }
+ }
+ 
++void MyMesh::sendQueuedEmergencyForwards() {
++  uint8_t public_channel_idx = 0xFF;
++  bool have_public = findBotChannel(BOT_CHANNEL_PUBLIC, public_channel_idx);
++  ChannelDetails public_channel;
++  if (have_public) have_public = getChannel(public_channel_idx, public_channel);
++
++  for (size_t i = 0; i < BOT_PENDING_EMERGENCY_SLOTS; i++) {
++    PendingEmergencyForward *pending = &pending_emergency_forwards[i];
++    if (!pending->active) continue;
++
++    bool success = false;
++    if (have_public) {
++      uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
++      success = sendGroupMessage(timestamp, public_channel.channel, _prefs.node_name, pending->text, pending->text_len);
++    }
++
++    if (success) {
++      bot_stats.emergency_forwards++;
++    } else {
++      bot_stats.emergency_forward_failures++;
++    }
++    pending->active = false;
++  }
++}
++
+ bool MyMesh::sendBotSelfAdvert(bool flood) {
+   mesh::Packet* pkt;
+   if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+@@ -745,6 +830,7 @@ void MyMesh::scheduleBotFloodAdvert(unsigned long interval_millis) {
+ }
+ 
+ void MyMesh::tickBot() {
++  sendQueuedEmergencyForwards();
+   sendQueuedBotResponses();
+   if (next_bot_local_advert && millisHasNowPassed(next_bot_local_advert)) {
+     sendBotSelfAdvert(false);
+@@ -1088,7 +1174,10 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
+ #if CMESH_BOT_ENABLED
+   memset(&bot_stats, 0, sizeof(bot_stats));
+   memset(pending_bot_responses, 0, sizeof(pending_bot_responses));
++  memset(pending_emergency_forwards, 0, sizeof(pending_emergency_forwards));
+   memset(bot_command_cooldowns, 0, sizeof(bot_command_cooldowns));
++  emergency_rate_window_started = 0;
++  emergency_rate_count = 0;
+   next_bot_local_advert = 0;
+   next_bot_flood_advert = 0;
+ #endif
+diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
+index ed915b28..10b27feb 100644
+--- a/examples/companion_radio/MyMesh.h
++++ b/examples/companion_radio/MyMesh.h
+@@ -210,7 +210,12 @@ private:
+   void buildBotCommandContext(BotCommandContext &context, BotCommandId command_id);
+   bool enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
+                           const char *text, size_t text_len);
++  bool enqueueEmergencyForward(const BotMessage &message);
++  bool findBotChannel(BotChannelKind kind, uint8_t &channel_idx);
++  bool isEmergencyRateLimited();
++  void recordEmergencyRateLimitEvent();
+   void sendQueuedBotResponses();
++  void sendQueuedEmergencyForwards();
+   void tickBot();
+   void scheduleBotLocalAdvert(unsigned long interval_millis);
+   void scheduleBotFloodAdvert(unsigned long interval_millis);
+@@ -258,9 +263,18 @@ private:
+     size_t text_len;
+   };
+ 
++  struct PendingEmergencyForward {
++    bool active;
++    char text[BOT_MAX_GROUP_RESPONSE_LEN + 1];
++    size_t text_len;
++  };
++
+   BotStats bot_stats;
+   PendingBotResponse pending_bot_responses[BOT_PENDING_RESPONSE_SLOTS];
++  PendingEmergencyForward pending_emergency_forwards[BOT_PENDING_EMERGENCY_SLOTS];
+   BotCommandCooldown bot_command_cooldowns[BOT_COMMAND_COOLDOWN_SLOTS];
++  unsigned long emergency_rate_window_started;
++  uint8_t emergency_rate_count;
+   unsigned long next_bot_local_advert;
+   unsigned long next_bot_flood_advert;
+ #endif
