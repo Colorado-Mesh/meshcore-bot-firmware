@@ -1,0 +1,6 @@
+out/
+.venv/
+__pycache__/
+*.pyc
+vendor/MeshCore/.pio/
+vendor/MeshCore/out/

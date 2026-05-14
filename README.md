@@ -24,6 +24,16 @@ Develop firmware changes in `vendor/MeshCore`, commit them in that submodule wor
 bash scripts/export-patches.sh origin/main
 ```
 
+## Representative builds
+
+Build the release-gate companion environments and write size reports:
+
+```sh
+bash scripts/build-representative.sh --baseline
+```
+
+The build writes PlatformIO logs and `summary.json` to `out/size/`, and copied firmware artifacts to `out/firmware/`.
+
 Representative companion build environments:
 
 - `Heltec_v3_companion_radio_usb`
