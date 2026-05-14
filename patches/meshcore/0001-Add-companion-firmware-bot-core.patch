@@ -1,0 +1,423 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Thu, 14 May 2026 13:36:50 -0600
+Subject: [PATCH] Add companion firmware bot core
+
+---
+ examples/companion_radio/BotPolicy.cpp   |  58 +++++++
+ examples/companion_radio/BotPolicy.h     |  12 ++
+ examples/companion_radio/BotTypes.h      |  99 ++++++++++++
+ examples/companion_radio/FirmwareBot.cpp | 193 +++++++++++++++++++++++
+ examples/companion_radio/FirmwareBot.h   |  13 ++
+ 5 files changed, 375 insertions(+)
+ create mode 100644 examples/companion_radio/BotPolicy.cpp
+ create mode 100644 examples/companion_radio/BotPolicy.h
+ create mode 100644 examples/companion_radio/BotTypes.h
+ create mode 100644 examples/companion_radio/FirmwareBot.cpp
+ create mode 100644 examples/companion_radio/FirmwareBot.h
+
+diff --git a/examples/companion_radio/BotPolicy.cpp b/examples/companion_radio/BotPolicy.cpp
+new file mode 100644
+index 00000000..bd3fc6c7
+--- /dev/null
++++ b/examples/companion_radio/BotPolicy.cpp
+@@ -0,0 +1,58 @@
++#include "BotPolicy.h"
++
++#include <ctype.h>
++#include <string.h>
++
++namespace {
++
++bool equalsIgnoreCase(const char* value, size_t len, const char* expected) {
++  if (!value || !expected) return false;
++
++  if (len > 0 && value[0] == '#') {
++    value++;
++    len--;
++  }
++
++  size_t expected_len = strlen(expected);
++  if (expected_len > 0 && expected[0] == '#') {
++    expected++;
++    expected_len--;
++  }
++  if (len != expected_len) return false;
++
++  for (size_t i = 0; i < len; i++) {
++    if (tolower((unsigned char)value[i]) != tolower((unsigned char)expected[i])) return false;
++  }
++  return true;
++}
++
++}
++
++namespace BotPolicy {
++
++BotChannelKind classifyChannel(const char* name, size_t len, bool direct_message) {
++  if (direct_message) return BOT_CHANNEL_DM;
++  if (equalsIgnoreCase(name, len, "Public")) return BOT_CHANNEL_PUBLIC;
++  if (equalsIgnoreCase(name, len, "#bot")) return BOT_CHANNEL_BOT;
++  if (equalsIgnoreCase(name, len, "#testing")) return BOT_CHANNEL_TESTING;
++  if (equalsIgnoreCase(name, len, "#emergency")) return BOT_CHANNEL_EMERGENCY;
++  return BOT_CHANNEL_OTHER;
++}
++
++BotPolicyDecision decide(BotChannelKind kind) {
++  if (kind == BOT_CHANNEL_DM || kind == BOT_CHANNEL_BOT || kind == BOT_CHANNEL_TESTING) {
++    return BOT_POLICY_ALLOW_NORMAL;
++  }
++  if (kind == BOT_CHANNEL_EMERGENCY) return BOT_POLICY_EMERGENCY_FORWARD;
++  return BOT_POLICY_IGNORE;
++}
++
++bool isNormalAllowed(BotChannelKind kind) {
++  return decide(kind) == BOT_POLICY_ALLOW_NORMAL;
++}
++
++bool isEmergency(BotChannelKind kind) {
++  return decide(kind) == BOT_POLICY_EMERGENCY_FORWARD;
++}
++
++}
+diff --git a/examples/companion_radio/BotPolicy.h b/examples/companion_radio/BotPolicy.h
+new file mode 100644
+index 00000000..e074e3eb
+--- /dev/null
++++ b/examples/companion_radio/BotPolicy.h
+@@ -0,0 +1,12 @@
++#pragma once
++
++#include "BotTypes.h"
++
++namespace BotPolicy {
++
++BotChannelKind classifyChannel(const char* name, size_t len, bool direct_message);
++BotPolicyDecision decide(BotChannelKind kind);
++bool isNormalAllowed(BotChannelKind kind);
++bool isEmergency(BotChannelKind kind);
++
++}
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+new file mode 100644
+index 00000000..869ae3ae
+--- /dev/null
++++ b/examples/companion_radio/BotTypes.h
+@@ -0,0 +1,99 @@
++#pragma once
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define BOT_MAX_TEXT_LEN 160
++#define BOT_MAX_RESPONSE_LEN 144
++#define BOT_MAX_COMMAND_NAME_LEN 15
++#define BOT_MAX_COMMAND_ARGS_LEN 79
++#define BOT_MAX_CHANNEL_NAME_LEN 23
++#define BOT_MAX_SENDER_NAME_LEN 31
++#define BOT_SENDER_KEY_PREFIX_LEN 6
++
++enum BotChannelKind : uint8_t {
++  BOT_CHANNEL_DM = 0,
++  BOT_CHANNEL_PUBLIC,
++  BOT_CHANNEL_BOT,
++  BOT_CHANNEL_TESTING,
++  BOT_CHANNEL_EMERGENCY,
++  BOT_CHANNEL_OTHER
++};
++
++enum BotPolicyDecision : uint8_t {
++  BOT_POLICY_IGNORE = 0,
++  BOT_POLICY_ALLOW_NORMAL,
++  BOT_POLICY_EMERGENCY_FORWARD
++};
++
++enum BotCommandId : uint8_t {
++  BOT_COMMAND_NONE = 0,
++  BOT_COMMAND_HELP,
++  BOT_COMMAND_PING,
++  BOT_COMMAND_TEST,
++  BOT_COMMAND_HELLO,
++  BOT_COMMAND_ABOUT,
++  BOT_COMMAND_DICE,
++  BOT_COMMAND_STATUS,
++  BOT_COMMAND_UNKNOWN
++};
++
++enum BotWriteResult : uint8_t {
++  BOT_WRITE_OK = 0,
++  BOT_WRITE_TRUNCATED,
++  BOT_WRITE_NO_SPACE
++};
++
++struct BotFingerprint {
++  uint64_t value;
++};
++
++struct BotMessage {
++  BotChannelKind channel_kind;
++  char channel_name[BOT_MAX_CHANNEL_NAME_LEN + 1];
++  char sender_name[BOT_MAX_SENDER_NAME_LEN + 1];
++  uint8_t sender_key_prefix[BOT_SENDER_KEY_PREFIX_LEN];
++  uint32_t sender_timestamp;
++  char text[BOT_MAX_TEXT_LEN + 1];
++  size_t text_len;
++};
++
++struct BotCommand {
++  BotCommandId id;
++  char name[BOT_MAX_COMMAND_NAME_LEN + 1];
++  char args[BOT_MAX_COMMAND_ARGS_LEN + 1];
++  size_t args_len;
++};
++
++struct BotResponse {
++  BotPolicyDecision decision;
++  BotFingerprint fingerprint;
++  char text[BOT_MAX_RESPONSE_LEN + 1];
++  size_t text_len;
++  bool truncated;
++};
++
++struct BotPrefs {
++  bool enabled;
++  uint16_t normal_delay_ms;
++  uint16_t normal_jitter_ms;
++  uint8_t max_response_parts;
++  char bot_channel[BOT_MAX_CHANNEL_NAME_LEN + 1];
++  char testing_channel[BOT_MAX_CHANNEL_NAME_LEN + 1];
++  char emergency_channel[BOT_MAX_CHANNEL_NAME_LEN + 1];
++  char public_channel[BOT_MAX_CHANNEL_NAME_LEN + 1];
++};
++
++struct BotStats {
++  uint32_t observed_messages;
++  uint32_t ignored_messages;
++  uint32_t eligible_messages;
++  uint32_t emergency_messages;
++  uint32_t parse_errors;
++};
++
++static_assert(sizeof(BotMessage) <= 240, "BotMessage RAM budget exceeded");
++static_assert(sizeof(BotCommand) <= 120, "BotCommand RAM budget exceeded");
++static_assert(sizeof(BotResponse) <= 184, "BotResponse RAM budget exceeded");
++static_assert(sizeof(BotPrefs) <= 128, "BotPrefs RAM budget exceeded");
++static_assert(sizeof(BotStats) <= 32, "BotStats RAM budget exceeded");
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+new file mode 100644
+index 00000000..c9447282
+--- /dev/null
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -0,0 +1,193 @@
++#include "FirmwareBot.h"
++
++#include <ctype.h>
++#include <string.h>
++
++namespace {
++
++uint64_t fnv1aUpdate(uint64_t hash, uint8_t value) {
++  hash ^= value;
++  hash *= 1099511628211ULL;
++  return hash;
++}
++
++uint64_t fnv1aUpdateBytes(uint64_t hash, const uint8_t* data, size_t len) {
++  for (size_t i = 0; i < len; i++) {
++    hash = fnv1aUpdate(hash, data[i]);
++  }
++  return hash;
++}
++
++uint64_t fnv1aUpdateTextLower(uint64_t hash, const char* value, size_t len) {
++  for (size_t i = 0; i < len; i++) {
++    hash = fnv1aUpdate(hash, (uint8_t)tolower((unsigned char)value[i]));
++  }
++  return hash;
++}
++
++bool isSpaceByte(char ch) {
++  return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
++}
++
++bool isControlByte(char ch) {
++  unsigned char value = (unsigned char)ch;
++  return value < 0x20 || value == 0x7F;
++}
++
++bool namesEqual(const char* name, size_t len, const char* expected) {
++  size_t expected_len = strlen(expected);
++  if (len != expected_len) return false;
++  for (size_t i = 0; i < len; i++) {
++    if (tolower((unsigned char)name[i]) != expected[i]) return false;
++  }
++  return true;
++}
++
++bool isCommandDelimiter(char ch) {
++  return ch == ' ' || ch == ':' || ch == ',' || ch == '.' || ch == ';' || ch == '?' || ch == '!';
++}
++
++uint64_t fnv1aUpdateU32(uint64_t hash, uint32_t value) {
++  hash = fnv1aUpdate(hash, (uint8_t)(value & 0xFF));
++  hash = fnv1aUpdate(hash, (uint8_t)((value >> 8) & 0xFF));
++  hash = fnv1aUpdate(hash, (uint8_t)((value >> 16) & 0xFF));
++  hash = fnv1aUpdate(hash, (uint8_t)((value >> 24) & 0xFF));
++  return hash;
++}
++
++size_t boundedStrLen(const char* value, size_t max_len) {
++  size_t len = 0;
++  while (len < max_len && value[len] != 0) len++;
++  return len;
++}
++
++}
++
++namespace FirmwareBot {
++
++BotWriteResult normalizeText(const char* input, size_t input_len, char* output, size_t output_len, size_t* written) {
++  if (written) *written = 0;
++  if (!output || output_len == 0) return BOT_WRITE_NO_SPACE;
++
++  size_t out = 0;
++  bool pending_space = false;
++  bool truncated = false;
++
++  for (size_t i = 0; i < input_len; i++) {
++    char ch = input ? input[i] : 0;
++    if (ch == 0) break;
++
++    if (isSpaceByte(ch) || isControlByte(ch)) {
++      pending_space = out > 0;
++      continue;
++    }
++
++    if (pending_space) {
++      if (out + 1 >= output_len) {
++        truncated = true;
++        break;
++      }
++      output[out++] = ' ';
++      pending_space = false;
++    }
++
++    if (out + 1 >= output_len) {
++      truncated = true;
++      break;
++    }
++    output[out++] = ch;
++  }
++
++  output[out] = 0;
++  if (written) *written = out;
++  return truncated ? BOT_WRITE_TRUNCATED : BOT_WRITE_OK;
++}
++
++BotCommandId commandIdForName(const char* name, size_t len) {
++  if (namesEqual(name, len, "help") || namesEqual(name, len, "cmd") || namesEqual(name, len, "commands")) return BOT_COMMAND_HELP;
++  if (namesEqual(name, len, "ping")) return BOT_COMMAND_PING;
++  if (namesEqual(name, len, "test")) return BOT_COMMAND_TEST;
++  if (namesEqual(name, len, "hello") || namesEqual(name, len, "hi")) return BOT_COMMAND_HELLO;
++  if (namesEqual(name, len, "about")) return BOT_COMMAND_ABOUT;
++  if (namesEqual(name, len, "dice") || namesEqual(name, len, "roll")) return BOT_COMMAND_DICE;
++  if (namesEqual(name, len, "status")) return BOT_COMMAND_STATUS;
++  return BOT_COMMAND_UNKNOWN;
++}
++
++bool parseCommand(const char* text, size_t text_len, BotCommand* command) {
++  if (!command) return false;
++  memset(command, 0, sizeof(*command));
++  command->id = BOT_COMMAND_NONE;
++
++  char normalized[BOT_MAX_TEXT_LEN + 1];
++  size_t normalized_len = 0;
++  normalizeText(text, text_len, normalized, sizeof(normalized), &normalized_len);
++
++  if (normalized_len < 2 || (normalized[0] != '!' && normalized[0] != '/')) return false;
++
++  size_t pos = 1;
++  while (pos < normalized_len && normalized[pos] == ' ') pos++;
++  size_t name_start = pos;
++  while (pos < normalized_len && !isCommandDelimiter(normalized[pos])) pos++;
++  size_t name_len = pos - name_start;
++  if (name_len == 0) return false;
++
++  size_t copy_name_len = name_len;
++  if (copy_name_len > BOT_MAX_COMMAND_NAME_LEN) copy_name_len = BOT_MAX_COMMAND_NAME_LEN;
++  for (size_t i = 0; i < copy_name_len; i++) {
++    command->name[i] = (char)tolower((unsigned char)normalized[name_start + i]);
++  }
++  command->name[copy_name_len] = 0;
++  command->id = name_len > BOT_MAX_COMMAND_NAME_LEN ? BOT_COMMAND_UNKNOWN : commandIdForName(command->name, copy_name_len);
++
++  while (pos < normalized_len && isCommandDelimiter(normalized[pos])) pos++;
++  size_t args_len = normalized_len - pos;
++  if (args_len > BOT_MAX_COMMAND_ARGS_LEN) args_len = BOT_MAX_COMMAND_ARGS_LEN;
++  if (args_len > 0) memcpy(command->args, &normalized[pos], args_len);
++  command->args[args_len] = 0;
++  command->args_len = args_len;
++
++  return true;
++}
++
++BotWriteResult writeResponse(char* output, size_t output_len, const char* text, size_t text_len, size_t* written) {
++  if (written) *written = 0;
++  if (!output || output_len == 0) return BOT_WRITE_NO_SPACE;
++
++  if (!text && text_len > 0) {
++    output[0] = 0;
++    return BOT_WRITE_NO_SPACE;
++  }
++
++  size_t copy_len = text_len;
++  if (copy_len + 1 > output_len) copy_len = output_len - 1;
++  if (copy_len > 0) memcpy(output, text, copy_len);
++  output[copy_len] = 0;
++  if (written) *written = copy_len;
++
++  return copy_len < text_len ? BOT_WRITE_TRUNCATED : BOT_WRITE_OK;
++}
++
++BotFingerprint fingerprintFor(const BotMessage& message) {
++  uint64_t hash = 1469598103934665603ULL;
++  hash = fnv1aUpdate(hash, (uint8_t)message.channel_kind);
++  const char* channel_name = message.channel_name;
++  size_t channel_name_len = boundedStrLen(message.channel_name, sizeof(message.channel_name));
++  if (channel_name_len > 0 && channel_name[0] == '#') {
++    channel_name++;
++    channel_name_len--;
++  }
++  hash = fnv1aUpdateTextLower(hash, channel_name, channel_name_len);
++  hash = fnv1aUpdateBytes(hash, message.sender_key_prefix, sizeof(message.sender_key_prefix));
++  hash = fnv1aUpdateU32(hash, message.sender_timestamp);
++
++  char normalized[BOT_MAX_TEXT_LEN + 1];
++  size_t normalized_len = 0;
++  normalizeText(message.text, message.text_len, normalized, sizeof(normalized), &normalized_len);
++  hash = fnv1aUpdateTextLower(hash, normalized, normalized_len);
++
++  BotFingerprint fingerprint = { hash };
++  return fingerprint;
++}
++
++}
+diff --git a/examples/companion_radio/FirmwareBot.h b/examples/companion_radio/FirmwareBot.h
+new file mode 100644
+index 00000000..8fce16ab
+--- /dev/null
++++ b/examples/companion_radio/FirmwareBot.h
+@@ -0,0 +1,13 @@
++#pragma once
++
++#include "BotTypes.h"
++
++namespace FirmwareBot {
++
++BotWriteResult normalizeText(const char* input, size_t input_len, char* output, size_t output_len, size_t* written);
++bool parseCommand(const char* text, size_t text_len, BotCommand* command);
++BotWriteResult writeResponse(char* output, size_t output_len, const char* text, size_t text_len, size_t* written);
++BotFingerprint fingerprintFor(const BotMessage& message);
++BotCommandId commandIdForName(const char* name, size_t len);
++
++}
