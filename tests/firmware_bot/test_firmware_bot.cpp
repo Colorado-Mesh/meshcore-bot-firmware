@@ -4,6 +4,7 @@
 
 #include "BotCommands.h"
 #include "BotPolicy.h"
+#include "BotPrefs.h"
 #include "EmergencyForwarder.h"
 #include "FirmwareBot.h"
 #include "KnownBotRegistry.h"
@@ -32,6 +33,154 @@ static void test_channel_policy() {
   assert(!BotPolicy::isNormalAllowed(BOT_CHANNEL_EMERGENCY));
   assert(BotPolicy::classifyChannel("#botnet", 7, false) == BOT_CHANNEL_OTHER);
   assert(BotPolicy::decide(BOT_CHANNEL_OTHER) == BOT_POLICY_IGNORE);
+}
+
+static void test_bot_prefs_defaults() {
+  BotPrefs prefs;
+  BotPrefsCodec::defaults(prefs);
+  assert(prefs.enabled);
+  assert(prefs.normal_delay_ms == BOT_RESPONSE_DELAY_BASE_MILLIS);
+  assert(prefs.normal_jitter_ms == BOT_RESPONSE_DELAY_JITTER_MILLIS);
+  assert(prefs.local_advert_interval_ms == BOT_PREFS_DEFAULT_LOCAL_ADVERT_MILLIS);
+  assert(prefs.flood_advert_interval_ms == BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS);
+  assert(strcmp(prefs.bot_channel, "#bot") == 0);
+  assert(strcmp(prefs.testing_channel, "#testing") == 0);
+  assert(strcmp(prefs.emergency_channel, "#emergency") == 0);
+  assert(strcmp(prefs.public_channel, "Public") == 0);
+  assert(BotPrefsCodec::serializedSize() == BOT_PREFS_SERIALIZED_SIZE);
+  assert(BotPrefsCodec::commandEnabled(prefs, BOT_COMMAND_PING));
+  assert(BotPrefsCodec::commandEnabled(prefs, BOT_COMMAND_UNKNOWN));
+}
+
+static void test_bot_prefs_serialization_round_trip() {
+  BotPrefs prefs;
+  BotPrefsCodec::defaults(prefs);
+  prefs.enabled = false;
+  prefs.normal_delay_ms = 2345;
+  prefs.normal_jitter_ms = 6789;
+  prefs.local_advert_interval_ms = 123456;
+  prefs.flood_advert_interval_ms = 654321;
+  strncpy(prefs.bot_channel, "#ops", sizeof(prefs.bot_channel) - 1);
+  uint8_t key[BOT_SENDER_KEY_PREFIX_LEN] = { 0xA0, 0xB1, 0xC2, 0xD3, 0xE4, 0xF5 };
+  assert(BotPrefsCodec::addKnownBot(prefs, key, BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL, "alpha"));
+  BotPrefsCodec::setCommandEnabled(prefs, BOT_COMMAND_STATUS, false);
+
+  uint8_t blob[BOT_PREFS_SERIALIZED_SIZE];
+  assert(BotPrefsCodec::serialize(prefs, blob, sizeof(blob)));
+  BotPrefs loaded;
+  assert(BotPrefsCodec::deserialize(blob, sizeof(blob), loaded));
+  assert(!loaded.enabled);
+  assert(loaded.normal_delay_ms == 2345);
+  assert(loaded.normal_jitter_ms == 6789);
+  assert(loaded.local_advert_interval_ms == 123456);
+  assert(loaded.flood_advert_interval_ms == 654321);
+  assert(strcmp(loaded.bot_channel, "#ops") == 0);
+  assert(!BotPrefsCodec::commandEnabled(loaded, BOT_COMMAND_STATUS));
+  assert(BotPrefsCodec::findKnownBot(loaded, key) != NULL);
+  assert(strcmp(BotPrefsCodec::findKnownBot(loaded, key)->label, "alpha") == 0);
+}
+
+static void test_bot_prefs_rejects_corrupt_and_wrong_version() {
+  BotPrefs prefs;
+  BotPrefsCodec::defaults(prefs);
+  uint8_t blob[BOT_PREFS_SERIALIZED_SIZE];
+  assert(BotPrefsCodec::serialize(prefs, blob, sizeof(blob)));
+
+  BotPrefs loaded;
+  blob[20] ^= 0x55;
+  assert(!BotPrefsCodec::deserialize(blob, sizeof(blob), loaded));
+  assert(loaded.enabled);
+  assert(strcmp(loaded.bot_channel, "#bot") == 0);
+
+  assert(BotPrefsCodec::serialize(prefs, blob, sizeof(blob)));
+  blob[4] = 0x7F;
+  assert(!BotPrefsCodec::deserialize(blob, sizeof(blob), loaded));
+  assert(strcmp(loaded.public_channel, "Public") == 0);
+  assert(!BotPrefsCodec::deserialize(blob, sizeof(blob) - 1, loaded));
+}
+
+static void test_bot_prefs_validation_and_command_mask() {
+  BotPrefs prefs;
+  BotPrefsCodec::defaults(prefs);
+  prefs.normal_delay_ms = BOT_PREFS_MAX_DELAY_MILLIS + 1;
+  prefs.normal_jitter_ms = BOT_PREFS_MAX_DELAY_MILLIS + 1;
+  prefs.local_advert_interval_ms = BOT_PREFS_MAX_ADVERT_MILLIS + 1;
+  prefs.flood_advert_interval_ms = BOT_PREFS_MAX_ADVERT_MILLIS + 1;
+  prefs.max_response_parts = 99;
+  prefs.bot_channel[0] = 0;
+  prefs.command_mask = 0xFFFFFFFFUL;
+  BotPrefsCodec::validate(prefs);
+  assert(prefs.normal_delay_ms == BOT_PREFS_MAX_DELAY_MILLIS);
+  assert(prefs.normal_jitter_ms == BOT_PREFS_MAX_DELAY_MILLIS);
+  assert(prefs.local_advert_interval_ms == BOT_PREFS_MAX_ADVERT_MILLIS);
+  assert(prefs.flood_advert_interval_ms == BOT_PREFS_MAX_ADVERT_MILLIS);
+  assert(prefs.max_response_parts == BOT_EMERGENCY_MAX_PARTS);
+  assert(strcmp(prefs.bot_channel, "#bot") == 0);
+  assert((prefs.command_mask & ~BOT_COMMAND_MASK_ALL) == 0);
+  assert(BotPrefsCodec::channelNameValid("#ops", false));
+  assert(!BotPrefsCodec::channelNameValid("ops", false));
+  assert(BotPrefsCodec::channelNameValid("Public", true));
+  assert(!BotPrefsCodec::channelNameValid("#Public", true));
+  assert(!BotPrefsCodec::channelNameValid("#abcdefghijklmnopqrstuvw", false));
+
+  BotPrefs duplicate_channels;
+  BotPrefsCodec::defaults(duplicate_channels);
+  strncpy(duplicate_channels.testing_channel, "#bot", sizeof(duplicate_channels.testing_channel) - 1);
+  assert(!BotPrefsCodec::channelConfigValid(duplicate_channels));
+  BotPrefsCodec::validate(duplicate_channels);
+  assert(strcmp(duplicate_channels.testing_channel, "#testing") == 0);
+
+  BotPrefsCodec::setCommandEnabled(prefs, BOT_COMMAND_PING, false);
+  assert(!BotPrefsCodec::commandEnabled(prefs, BOT_COMMAND_PING));
+  BotPrefsCodec::setCommandEnabled(prefs, BOT_COMMAND_PING, true);
+  assert(BotPrefsCodec::commandEnabled(prefs, BOT_COMMAND_PING));
+  BotCommandId id = BOT_COMMAND_NONE;
+  assert(BotPrefsCodec::commandIdForName("ROLL", &id));
+  assert(id == BOT_COMMAND_DICE);
+  assert(!BotPrefsCodec::commandIdForName("nope", &id));
+}
+
+static void test_bot_prefs_known_bot_helpers() {
+  BotPrefs prefs;
+  BotPrefsCodec::defaults(prefs);
+  uint8_t key1[BOT_SENDER_KEY_PREFIX_LEN];
+  uint8_t key2[BOT_SENDER_KEY_PREFIX_LEN];
+  char hex[BOT_SENDER_KEY_PREFIX_LEN * 2 + 1];
+  assert(BotPrefsCodec::parseKeyPrefixHex("010203040506", key1));
+  assert(!BotPrefsCodec::parseKeyPrefixHex("01020304050", key2));
+  assert(!BotPrefsCodec::parseKeyPrefixHex("01020304050x", key2));
+  BotPrefsCodec::formatKeyPrefixHex(key1, hex, sizeof(hex));
+  assert(strcmp(hex, "010203040506") == 0);
+  assert(BotPrefsCodec::addKnownBot(prefs, key1, BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL, "alpha"));
+  assert(BotPrefsCodec::findKnownBot(prefs, key1) != NULL);
+  assert(BotPrefsCodec::addKnownBot(prefs, key1, 0, "beta"));
+  assert(BotPrefsCodec::findKnownBot(prefs, key1)->flags == 0);
+  assert(strcmp(BotPrefsCodec::findKnownBot(prefs, key1)->label, "beta") == 0);
+  assert(BotPrefsCodec::removeKnownBot(prefs, key1));
+  assert(!BotPrefsCodec::removeKnownBot(prefs, key1));
+
+  for (size_t i = 0; i < BOT_KNOWN_BOT_SLOTS; i++) {
+    for (size_t j = 0; j < BOT_SENDER_KEY_PREFIX_LEN; j++) key2[j] = (uint8_t)(i * 10 + j);
+    assert(BotPrefsCodec::addKnownBot(prefs, key2, BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL, "bot"));
+  }
+  uint8_t overflow[BOT_SENDER_KEY_PREFIX_LEN] = { 99, 98, 97, 96, 95, 94 };
+  assert(!BotPrefsCodec::addKnownBot(prefs, overflow, BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL, "full"));
+}
+
+static void test_prefs_aware_channel_policy() {
+  BotPrefs prefs;
+  BotPrefsCodec::defaults(prefs);
+  strncpy(prefs.bot_channel, "#ops", sizeof(prefs.bot_channel) - 1);
+  strncpy(prefs.testing_channel, "#lab", sizeof(prefs.testing_channel) - 1);
+  strncpy(prefs.emergency_channel, "#sos", sizeof(prefs.emergency_channel) - 1);
+  strncpy(prefs.public_channel, "Town", sizeof(prefs.public_channel) - 1);
+  assert(BotPolicy::classifyChannel("#ops", 4, false, prefs) == BOT_CHANNEL_BOT);
+  assert(BotPolicy::classifyChannel("ops", 3, false, prefs) == BOT_CHANNEL_BOT);
+  assert(BotPolicy::classifyChannel("#lab", 4, false, prefs) == BOT_CHANNEL_TESTING);
+  assert(BotPolicy::classifyChannel("#sos", 4, false, prefs) == BOT_CHANNEL_EMERGENCY);
+  assert(BotPolicy::classifyChannel("#SOS", 4, false, prefs) == BOT_CHANNEL_OTHER);
+  assert(BotPolicy::classifyChannel("Town", 4, false, prefs) == BOT_CHANNEL_PUBLIC);
+  assert(BotPolicy::classifyChannel("#bot", 4, false, prefs) == BOT_CHANNEL_OTHER);
 }
 
 static void test_normalize_text() {
@@ -143,6 +292,10 @@ static BotCommandContext make_context() {
   BotCommandContext context;
   memset(&context, 0, sizeof(context));
   strncpy(context.node_name, "cm-bot", sizeof(context.node_name) - 1);
+  strncpy(context.bot_channel, "#bot", sizeof(context.bot_channel) - 1);
+  strncpy(context.testing_channel, "#testing", sizeof(context.testing_channel) - 1);
+  strncpy(context.emergency_channel, "#emergency", sizeof(context.emergency_channel) - 1);
+  strncpy(context.public_channel, "Public", sizeof(context.public_channel) - 1);
   context.uptime_seconds = 1234;
   context.battery_millivolts = 4180;
   context.storage_used_kb = 12;
@@ -190,7 +343,7 @@ static void test_command_outputs() {
 
   result = run_command("!channels", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Configured channels: 4. Normal bot replies: DM, #bot, #testing.") == 0);
+  assert(strcmp(out, "Channels: #bot #testing emergency=#emergency public=Public (4 configured)") == 0);
 
   result = run_command("!status", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
@@ -662,6 +815,12 @@ static void test_response_coordinator_rejects_non_normal() {
 
 int main() {
   test_channel_policy();
+  test_bot_prefs_defaults();
+  test_bot_prefs_serialization_round_trip();
+  test_bot_prefs_rejects_corrupt_and_wrong_version();
+  test_bot_prefs_validation_and_command_mask();
+  test_bot_prefs_known_bot_helpers();
+  test_prefs_aware_channel_policy();
   test_normalize_text();
   test_normalize_truncation();
   test_parse_command();
