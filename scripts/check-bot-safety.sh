@@ -65,6 +65,31 @@ require_pattern 'recordBotObservation\(|sendQueuedEmergencyForwards\(|tickBot\('
   "${MESHCORE_DIR}/examples/companion_radio/MyMesh.cpp"
 require_pattern '_prefs\.path_hash_mode[[:space:]]*=[[:space:]]*1' 'bot firmware defaults to two-byte path hashes' \
   "${MESHCORE_DIR}/examples/companion_radio/MyMesh.cpp"
+if grep -R -n -E 'BOT_EMERGENCY_RATE_LIMIT|isEmergencyRateLimited|recordEmergencyRateLimitEvent|emergency_rate_window_started|emergency_rate_count' \
+  "${MESHCORE_DIR}/examples/companion_radio"; then
+  echo "Emergency forwarding must not be globally rate limited or dropped by a bot-local quota." >&2
+  exit 1
+fi
+if ! python3 - "${MESHCORE_DIR}/examples/companion_radio/MyMesh.cpp" <<'PY'
+import re
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+start = text.find("void MyMesh::sendQueuedEmergencyForwards() {")
+end = text.find("bool MyMesh::sendBotSelfAdvert", start)
+if start < 0 or end < 0:
+    sys.exit(1)
+body = text[start:end]
+success_block = re.search(r"if \(success\) \{(?P<block>.*?)\n    \} else \{", body, re.S)
+if not success_block or "pending->active = false;" not in success_block.group("block"):
+    sys.exit(1)
+else_block = re.search(r"\} else \{(?P<block>.*?)\n    \}\n  \}", body, re.S)
+if else_block and "pending->active = false;" in else_block.group("block"):
+    sys.exit(1)
+PY
+then
+  echo "Emergency forwards must stay queued after failed public sends." >&2
+  exit 1
+fi
 require_pattern 'CMESH_BOT_ENABLED=1' 'production bot build flag is enabled' \
   "${MESHCORE_DIR}/platformio.ini"
 require_pattern 'ENABLE_PRIVATE_KEY_IMPORT=0' 'private key import disabled in production bot flags' \
