@@ -102,7 +102,7 @@ export FIRMWARE_VERSION="${FIRMWARE_VERSION:-local}"
 failed_envs=()
 for env in "${REPRESENTATIVE_ENVS[@]}"; do
   log_path="${LOG_DIR}/${env}.log"
-  echo "Building ${env}"
+  echo "Building ${env} (CMESH_BOT_ENABLED=1, private-key import/export disabled)"
   if (cd "$MESHCORE_DIR" && /usr/bin/env bash build.sh build-firmware "$env") >"$log_path" 2>&1; then
     if compgen -G "${MESHCORE_DIR}/out/${env}-*" >/dev/null; then
       cp "${MESHCORE_DIR}/out/${env}-"* "$ARTIFACT_DIR"/
