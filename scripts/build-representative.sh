@@ -10,6 +10,10 @@ Usage: scripts/build-representative.sh [--baseline|--compare <baseline-json>]
 Applies the MeshCore patch queue, builds the representative companion firmware
 environments, copies firmware artifacts to out/firmware, and writes a size
 summary to out/size/summary.json.
+
+To intentionally refresh a baseline, run --baseline and review out/size/summary.json
+before copying it to the tracked baseline path. Optional environment variables:
+SIZE_THRESHOLDS=<json>, SIZE_REPORT=<path>, SIZE_ENFORCE_THRESHOLDS=1.
 EOF
 }
 
@@ -87,7 +91,11 @@ if [ ! -f "${MESHCORE_DIR}/build.sh" ]; then
   exit 1
 fi
 
-"${MESHCORE_FW_ROOT}/scripts/apply-patches.sh"
+if [ "${MESHCORE_SKIP_APPLY_PATCHES:-0}" = "1" ]; then
+  echo "Skipping MeshCore patch application; using current vendor/MeshCore tree."
+else
+  "${MESHCORE_FW_ROOT}/scripts/apply-patches.sh"
+fi
 
 OUT_DIR="${MESHCORE_FW_ROOT}/out"
 LOG_DIR="${OUT_DIR}/size"
@@ -121,6 +129,15 @@ parser_args=(
 for env in "${REPRESENTATIVE_ENVS[@]}"; do
   parser_args+=(--env "$env")
 done
+if [ -n "${SIZE_THRESHOLDS:-}" ]; then
+  parser_args+=(--thresholds "$SIZE_THRESHOLDS")
+fi
+if [ -n "${SIZE_REPORT:-}" ]; then
+  parser_args+=(--report "$SIZE_REPORT")
+fi
+if [ "${SIZE_ENFORCE_THRESHOLDS:-0}" = "1" ]; then
+  parser_args+=(--enforce-thresholds)
+fi
 
 case "$mode" in
   baseline)

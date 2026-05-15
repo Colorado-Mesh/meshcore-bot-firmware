@@ -32,8 +32,14 @@ jobs:
       - name: Install PlatformIO
         run: python3 -m pip install --upgrade platformio
 
+      - name: Run host and safety checks
+        run: bash scripts/verify.sh --no-build
+
       - name: Build representative firmware
-        run: bash scripts/build-representative.sh --baseline
+        run: |
+          MESHCORE_SKIP_APPLY_PATCHES=1 \
+          SIZE_REPORT=out/size/report.txt \
+          bash scripts/build-representative.sh --baseline
 
       - name: Upload size reports
         uses: actions/upload-artifact@v4
