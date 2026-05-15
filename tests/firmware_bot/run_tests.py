@@ -21,6 +21,7 @@ def main():
         str(SRC_DIR),
         str(ROOT / "tests" / "firmware_bot" / "test_firmware_bot.cpp"),
         str(SRC_DIR / "FirmwareBot.cpp"),
+        str(SRC_DIR / "BotCommandRegistry.cpp"),
         str(SRC_DIR / "BotPrefs.cpp"),
         str(SRC_DIR / "BotPolicy.cpp"),
         str(SRC_DIR / "BotCommands.cpp"),

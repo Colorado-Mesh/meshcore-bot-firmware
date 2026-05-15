@@ -9,6 +9,8 @@ bot_sources=(
   "${MESHCORE_DIR}/examples/companion_radio/FirmwareBot.cpp"
   "${MESHCORE_DIR}/examples/companion_radio/BotCommands.h"
   "${MESHCORE_DIR}/examples/companion_radio/BotCommands.cpp"
+  "${MESHCORE_DIR}/examples/companion_radio/BotCommandRegistry.h"
+  "${MESHCORE_DIR}/examples/companion_radio/BotCommandRegistry.cpp"
   "${MESHCORE_DIR}/examples/companion_radio/BotPolicy.h"
   "${MESHCORE_DIR}/examples/companion_radio/BotPolicy.cpp"
   "${MESHCORE_DIR}/examples/companion_radio/BotPrefs.h"
@@ -64,6 +66,8 @@ require_pattern 'BOT_POLICY_EMERGENCY_FORWARD' 'emergency traffic forwarding pol
 require_pattern 'recordBotObservation\(|sendQueuedEmergencyForwards\(|tickBot\(' 'emergency path is wired in MyMesh' \
   "${MESHCORE_DIR}/examples/companion_radio/MyMesh.cpp"
 require_pattern '_prefs\.path_hash_mode[[:space:]]*=[[:space:]]*1' 'bot firmware defaults to two-byte path hashes' \
+  "${MESHCORE_DIR}/examples/companion_radio/MyMesh.cpp"
+require_pattern 'command\.args_len > 0 \? botConfiguredTraceHashSize\(_prefs\.path_hash_mode\) : message\.path_hash_size' 'explicit bot trace paths use configured hash width' \
   "${MESHCORE_DIR}/examples/companion_radio/MyMesh.cpp"
 if grep -R -n -E 'BOT_EMERGENCY_RATE_LIMIT|isEmergencyRateLimited|recordEmergencyRateLimitEvent|emergency_rate_window_started|emergency_rate_count' \
   "${MESHCORE_DIR}/examples/companion_radio"; then
