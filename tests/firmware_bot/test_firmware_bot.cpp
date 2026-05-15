@@ -137,6 +137,14 @@ static void test_bot_prefs_validation_and_command_mask() {
   BotCommandId id = BOT_COMMAND_NONE;
   assert(BotPrefsCodec::commandIdForName("ROLL", &id));
   assert(id == BOT_COMMAND_DICE);
+  assert(BotPrefsCodec::commandIdForName("t", &id));
+  assert(id == BOT_COMMAND_TEST);
+  assert(BotPrefsCodec::commandIdForName("ver", &id));
+  assert(id == BOT_COMMAND_VERSION);
+  assert(BotPrefsCodec::commandIdForName("8ball", &id));
+  assert(id == BOT_COMMAND_MAGIC8);
+  assert(BotPrefsCodec::commandIdForName("p", &id));
+  assert(id == BOT_COMMAND_PATH);
   assert(!BotPrefsCodec::commandIdForName("nope", &id));
 }
 
@@ -230,6 +238,14 @@ static void test_parse_command() {
 
   BotCommand command;
   assert(!FirmwareBot::parseCommand("hello bot", 9, &command));
+  assert(!FirmwareBot::parseCommand("ping", 4, &command));
+  assert(FirmwareBot::parseCommand("ping", 4, &command, true));
+  assert(command.id == BOT_COMMAND_PING);
+  assert(command.args_len == 0);
+  assert(FirmwareBot::parseCommand("status please", 13, &command, true));
+  assert(command.id == BOT_COMMAND_STATUS);
+  assert(strcmp(command.args, "please") == 0);
+  assert(!FirmwareBot::parseCommand("random prose", 12, &command, true));
   assert(FirmwareBot::parseCommand("!PING", 5, &command));
   assert(command.id == BOT_COMMAND_PING);
   assert(strcmp(command.name, "ping") == 0);
@@ -252,6 +268,17 @@ static void test_parse_command() {
 
   assert(FirmwareBot::parseCommand("!hi", 3, &command));
   assert(command.id == BOT_COMMAND_HELLO);
+
+  assert(FirmwareBot::parseCommand("t", 1, &command, true));
+  assert(command.id == BOT_COMMAND_TEST);
+  assert(FirmwareBot::parseCommand("ver", 3, &command, true));
+  assert(command.id == BOT_COMMAND_VERSION);
+  assert(FirmwareBot::parseCommand("8ball", 5, &command, true));
+  assert(command.id == BOT_COMMAND_MAGIC8);
+  assert(FirmwareBot::parseCommand("p", 1, &command, true));
+  assert(command.id == BOT_COMMAND_PATH);
+  assert(FirmwareBot::parseCommand("decode", 6, &command, true));
+  assert(command.id == BOT_COMMAND_PATH);
 
   assert(FirmwareBot::parseCommand("!wat", 4, &command));
   assert(command.id == BOT_COMMAND_UNKNOWN);
@@ -307,6 +334,16 @@ static BotCommandContext make_context() {
   context.send_failures = 1;
   context.random_seed = 0x12345678;
   context.channel_count = 4;
+  strncpy(context.firmware_version, "v1.test", sizeof(context.firmware_version) - 1);
+  strncpy(context.firmware_build_date, "14 May 2026", sizeof(context.firmware_build_date) - 1);
+  context.suppressed_responses = 3;
+  context.pending_responses = 6;
+  context.emergency_forwards = 1;
+  context.emergency_forward_failures = 0;
+  context.packets_recv = 77;
+  context.packets_sent = 44;
+  context.packets_recv_errors = 2;
+  context.queue_depth = 3;
   return context;
 }
 
@@ -338,8 +375,25 @@ static void test_command_outputs() {
 
   result = run_command("!help", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "!ping") != NULL);
-  assert(strstr(out, "!channels") != NULL);
+  assert(strstr(out, "ping") != NULL);
+  assert(strstr(out, "path") != NULL);
+
+  result = run_command("!version", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Firmware v1.test built 14 May 2026") == 0);
+
+  result = run_command("!stats", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strstr(out, "Bot seen 9 ok 5 sent 4 fail 1") != NULL);
+  assert(strstr(out, "rf rx/tx 77/44") != NULL);
+
+  result = run_command("!magic8", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strstr(out, "Magic 8-ball:") == out);
+
+  result = run_command("!path", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Path unavailable") == 0);
 
   result = run_command("!channels", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
@@ -353,7 +407,28 @@ static void test_command_outputs() {
 
   result = run_command("!wat", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Unknown command. Try !help") == 0);
+  assert(strcmp(out, "Unknown command. Try help") == 0);
+}
+
+static void test_path_command() {
+  char out[BOT_MAX_RESPONSE_LEN + 1];
+  BotCommand command;
+  assert(FirmwareBot::parseCommand("!path", 5, &command));
+  BotCommandContext context = make_context();
+  uint8_t path[] = { 0x12, 0x34, 0xab, 0xcd, 0x00, 0x01 };
+  context.path = path;
+  context.path_len = (uint8_t)(((2 - 1) << 6) | 3);
+  context.path_hash_size = 2;
+  context.path_hash_count = 3;
+  context.path_snr_quarters = 23;
+  BotCommandResult result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Path 3h x 2B snr 5.75: 1234abcd0001") == 0);
+
+  context.path = NULL;
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Path unavailable") == 0);
 }
 
 static void test_dice_command() {
@@ -372,17 +447,25 @@ static void test_dice_command() {
   assert(strchr(out, '+') != NULL);
   assert(strchr(out, '=') != NULL);
 
-  result = run_command("!roll d7", out, sizeof(out));
+  result = run_command("!roll 20", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: !roll", 12) == 0);
+  assert(strncmp(out, "Rolled d20: ", 12) == 0);
+
+  result = run_command("!roll d100", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strncmp(out, "Rolled d100: ", 13) == 0);
+
+  result = run_command("!roll d1", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strncmp(out, "Usage: roll", 11) == 0);
 
   result = run_command("!roll 0d6", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: !roll", 12) == 0);
+  assert(strncmp(out, "Usage: roll", 11) == 0);
 
   result = run_command("!roll 11d6", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: !roll", 12) == 0);
+  assert(strncmp(out, "Usage: roll", 11) == 0);
 }
 
 static void test_command_truncation() {
@@ -826,6 +909,7 @@ int main() {
   test_parse_command();
   test_response_write();
   test_command_outputs();
+  test_path_command();
   test_dice_command();
   test_command_truncation();
   test_command_cooldown();
