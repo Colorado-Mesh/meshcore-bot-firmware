@@ -24,6 +24,8 @@ def main():
         str(SRC_DIR / "BotPolicy.cpp"),
         str(SRC_DIR / "BotCommands.cpp"),
         str(SRC_DIR / "EmergencyForwarder.cpp"),
+        str(SRC_DIR / "KnownBotRegistry.cpp"),
+        str(SRC_DIR / "ResponseCoordinator.cpp"),
         "-o",
         str(binary),
     ]
