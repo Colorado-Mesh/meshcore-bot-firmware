@@ -17,6 +17,7 @@ def main():
         "-Wall",
         "-Wextra",
         "-Werror",
+        "-DBOT_LOCAL_TIME_OFFSET_SECONDS=-21600",
         "-I",
         str(SRC_DIR),
         str(ROOT / "tests" / "firmware_bot" / "test_firmware_bot.cpp"),

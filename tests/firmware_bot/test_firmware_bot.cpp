@@ -1,5 +1,7 @@
 #include <assert.h>
+#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "BotCommandRegistry.h"
@@ -11,10 +13,46 @@
 #include "KnownBotRegistry.h"
 #include "ResponseCoordinator.h"
 
+static void assert_starts_with(const char* value, const char* prefix) {
+  assert(value != NULL);
+  assert(prefix != NULL);
+  assert(strncmp(value, prefix, strlen(prefix)) == 0);
+}
+
+static void assert_contains(const char* value, const char* needle) {
+  assert(value != NULL);
+  assert(needle != NULL);
+  assert(strstr(value, needle) != NULL);
+}
+
+static unsigned parse_unsigned_suffix(const char* value, size_t offset) {
+  assert(value != NULL);
+  assert(offset < strlen(value));
+  unsigned parsed = 0;
+  for (size_t i = offset; value[i] != 0; i++) {
+    assert(isdigit((unsigned char)value[i]));
+    parsed = parsed * 10 + (unsigned)(value[i] - '0');
+  }
+  return parsed;
+}
+
+static void assert_roll_range(const char* value, const char* prefix, unsigned low, unsigned high) {
+  assert_starts_with(value, prefix);
+  unsigned rolled = parse_unsigned_suffix(value, strlen(prefix));
+  assert(rolled >= low);
+  assert(rolled <= high);
+}
+
+static void assert_dice_single_range(const char* value, const char* prefix, unsigned high) {
+  assert_starts_with(value, prefix);
+  unsigned rolled = parse_unsigned_suffix(value, strlen(prefix));
+  assert(rolled >= 1);
+  assert(rolled <= high);
+}
+
 static void test_command_registry() {
   assert(BotCommandRegistry::commandCount() >= 18);
   uint32_t seen_masks = 0;
-  bool saw_hidden = false;
   bool saw_internal = false;
   for (size_t i = 0; i < BotCommandRegistry::commandCount(); i++) {
     const BotCommandMetadata* command = BotCommandRegistry::commandAt(i);
@@ -35,19 +73,22 @@ static void test_command_registry() {
     } else {
       assert(command->mask == 0);
       assert(!BotCommandRegistry::isDiscoverable(command->id));
-      saw_hidden = saw_hidden || command->visibility == BOT_COMMAND_VISIBILITY_HIDDEN;
+      assert(command->id != BOT_COMMAND_UNSUPPORTED);
       saw_internal = saw_internal || command->visibility == BOT_COMMAND_VISIBILITY_INTERNAL;
     }
   }
   assert((seen_masks & BOT_COMMAND_MASK_ALL) == BOT_COMMAND_MASK_ALL);
-  assert(saw_hidden);
   assert(saw_internal);
   assert(BotCommandRegistry::findByName("ROLL", 4)->id == BOT_COMMAND_ROLL);
   assert(BotCommandRegistry::findByName("dice", 4)->id == BOT_COMMAND_DICE);
   assert(BotCommandRegistry::findByName("commands", 8)->id == BOT_COMMAND_CMD);
+  assert(BotCommandRegistry::findByName("channel", 7)->id == BOT_COMMAND_CHANNELS);
   assert(BotCommandRegistry::findByName("t", 1)->id == BOT_COMMAND_TEST);
   assert(BotCommandRegistry::findByName("tracer", 6)->id == BOT_COMMAND_TRACER);
-  assert(BotCommandRegistry::findByName("weather", 7)->id == BOT_COMMAND_UNSUPPORTED);
+  assert(BotCommandRegistry::findByName("lookup", 6)->id == BOT_COMMAND_PREFIX);
+  assert(BotCommandRegistry::findByName("weather", 7) == NULL);
+  assert(BotCommandRegistry::findByName("reboot", 6) == NULL);
+  assert(BotCommandRegistry::findByName("nodes", 5) == NULL);
   assert(BotCommandRegistry::findByName("nope", 4) == NULL);
   assert(strcmp(BotCommandRegistry::commandName(BOT_COMMAND_ROLL), "roll") == 0);
   assert(BotCommandRegistry::commandMask(BOT_COMMAND_UNKNOWN) == 0);
@@ -90,6 +131,7 @@ static void test_bot_prefs_defaults() {
   assert(prefs.enabled);
   assert(prefs.normal_delay_ms == BOT_RESPONSE_DELAY_BASE_MILLIS);
   assert(prefs.normal_jitter_ms == BOT_RESPONSE_DELAY_JITTER_MILLIS);
+  assert(prefs.hop_step_ms == BOT_HOP_STEP_MILLIS_DEFAULT);
   assert(prefs.local_advert_interval_ms == BOT_PREFS_DEFAULT_LOCAL_ADVERT_MILLIS);
   assert(prefs.flood_advert_interval_ms == BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS);
   assert(strcmp(prefs.bot_channel, "#bot") == 0);
@@ -107,6 +149,7 @@ static void test_bot_prefs_serialization_round_trip() {
   prefs.enabled = false;
   prefs.normal_delay_ms = 2345;
   prefs.normal_jitter_ms = 6789;
+  prefs.hop_step_ms = 7500;
   prefs.local_advert_interval_ms = 123456;
   prefs.flood_advert_interval_ms = 654321;
   strncpy(prefs.bot_channel, "#ops", sizeof(prefs.bot_channel) - 1);
@@ -121,6 +164,7 @@ static void test_bot_prefs_serialization_round_trip() {
   assert(!loaded.enabled);
   assert(loaded.normal_delay_ms == 2345);
   assert(loaded.normal_jitter_ms == 6789);
+  assert(loaded.hop_step_ms == 7500);
   assert(loaded.local_advert_interval_ms == 123456);
   assert(loaded.flood_advert_interval_ms == 654321);
   assert(strcmp(loaded.bot_channel, "#ops") == 0);
@@ -199,10 +243,15 @@ static void test_bot_prefs_validation_and_command_mask() {
   assert(id == BOT_COMMAND_MAGIC8);
   assert(BotPrefsCodec::commandIdForName("p", &id));
   assert(id == BOT_COMMAND_PATH);
+  assert(BotPrefsCodec::commandIdForName("channel", &id));
+  assert(id == BOT_COMMAND_CHANNELS);
   assert(BotPrefsCodec::commandIdForName("tracer", &id));
   assert(id == BOT_COMMAND_TRACER);
   assert(!BotPrefsCodec::commandIdForName("weather", &id));
+  assert(!BotPrefsCodec::commandIdForName("reboot", &id));
   assert(BotPrefsCodec::commandIdForName("prefix", &id));
+  assert(id == BOT_COMMAND_PREFIX);
+  assert(BotPrefsCodec::commandIdForName("lookup", &id));
   assert(id == BOT_COMMAND_PREFIX);
   assert(!BotPrefsCodec::commandIdForName("unknown", &id));
   assert(!BotPrefsCodec::commandIdForName("nope", &id));
@@ -359,6 +408,9 @@ static void test_parse_command() {
 
   assert(FirmwareBot::parseCommand("!channels", 9, &command));
   assert(command.id == BOT_COMMAND_CHANNELS);
+  assert(FirmwareBot::parseCommand("!channel list", 13, &command));
+  assert(command.id == BOT_COMMAND_CHANNELS);
+  assert(strcmp(command.args, "list") == 0);
 
   assert(FirmwareBot::parseCommand("!cmd", 4, &command));
   assert(command.id == BOT_COMMAND_CMD);
@@ -385,10 +437,19 @@ static void test_parse_command() {
   assert(FirmwareBot::parseCommand("!prefix 01020304", 16, &command));
   assert(command.id == BOT_COMMAND_PREFIX);
   assert(strcmp(command.args, "01020304") == 0);
+  assert(FirmwareBot::parseCommand("!lookup 0102", 12, &command));
+  assert(command.id == BOT_COMMAND_PREFIX);
+  assert(strcmp(command.args, "0102") == 0);
+  assert(FirmwareBot::parseCommand("!trace 01,7a,55", 15, &command));
+  assert(command.id == BOT_COMMAND_TRACE);
+  assert(strcmp(command.args, "01,7a,55") == 0);
+  assert(FirmwareBot::parseCommand("!tracer 01,7a,55", 16, &command));
+  assert(command.id == BOT_COMMAND_TRACER);
+  assert(strcmp(command.args, "01,7a,55") == 0);
   assert(FirmwareBot::parseCommand("!weather", 8, &command));
-  assert(command.id == BOT_COMMAND_UNSUPPORTED);
+  assert(command.id == BOT_COMMAND_UNKNOWN);
   assert(FirmwareBot::parseCommand("!reboot now", 11, &command));
-  assert(command.id == BOT_COMMAND_UNSUPPORTED);
+  assert(command.id == BOT_COMMAND_UNKNOWN);
   assert(strcmp(command.name, "reboot") == 0);
   assert(strcmp(command.args, "now") == 0);
   assert(!FirmwareBot::parseCommand("weather", 7, &command, true));
@@ -463,6 +524,48 @@ static void test_channel_text_and_response_guards() {
   assert(written == BOT_MAX_GROUP_RESPONSE_LEN);
 }
 
+static void test_ack_response_format() {
+  BotMessage message;
+  memset(&message, 0, sizeof(message));
+  message.channel_kind = BOT_CHANNEL_BOT;
+  strncpy(message.channel_name, "#bot", sizeof(message.channel_name) - 1);
+  strncpy(message.sender_name, "alice", sizeof(message.sender_name) - 1);
+  message.sender_timestamp = 12345;
+  message.received_at_timestamp = 12345;
+  strncpy(message.text, "!test hello", sizeof(message.text) - 1);
+  message.text_len = strlen(message.text);
+  BotCommand command;
+  assert(FirmwareBot::parseCommand(message.text, message.text_len, &command));
+  char out[BOT_MAX_RESPONSE_LEN + 1];
+  size_t written = 0;
+  assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
+  assert(strcmp(out, "ack @[alice] #bot | 0h SNR 0.00 | recv 21:25:45 | hello") == 0);
+  assert(written == strlen(out));
+
+  message.channel_kind = BOT_CHANNEL_DM;
+  message.sender_name[0] = 0;
+  message.channel_name[0] = 0;
+  assert(FirmwareBot::parseCommand("!t", 2, &command));
+  assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
+  assert(strcmp(out, "ack @[unknown] direct | 0h SNR 0.00 | recv 21:25:45") == 0);
+
+  uint8_t path[] = { 0x12, 0x34, 0xab, 0xcd };
+  message.channel_kind = BOT_CHANNEL_BOT;
+  strncpy(message.channel_name, "#bot", sizeof(message.channel_name) - 1);
+  strncpy(message.sender_name, "bob", sizeof(message.sender_name) - 1);
+  message.path = path;
+  message.path_hash_size = 2;
+  message.path_hash_count = 2;
+  message.packet_snr_quarters = -5;
+  assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
+  assert(strcmp(out, "ack @[bob] #bot | 2h@2B SNR -1.25 | recv 21:25:45") == 0);
+  assert(strstr(out, "Bot test OK") == NULL);
+
+  char small[16];
+  assert(FirmwareBot::writeAckResponse(message, command, small, sizeof(small), &written) == BOT_WRITE_TRUNCATED);
+  assert(strncmp(small, "ack @[bob]", 10) == 0);
+}
+
 static void test_bot_advert_marker() {
   char out[32];
   size_t written = 0;
@@ -487,6 +590,7 @@ static BotMessage make_message(const char* channel, const char* text) {
   strncpy(message.sender_name, "alice", sizeof(message.sender_name) - 1);
   for (size_t i = 0; i < sizeof(message.sender_key_prefix); i++) message.sender_key_prefix[i] = (uint8_t)(i + 1);
   message.sender_timestamp = 12345;
+  message.received_at_timestamp = 12345;
   strncpy(message.text, text, sizeof(message.text) - 1);
   message.text_len = strlen(message.text);
   return message;
@@ -540,11 +644,23 @@ static void test_command_outputs() {
 
   result = run_command("!test", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Bot test OK") == 0);
+  assert_starts_with(out, "ack @[");
+  assert_contains(out, "recv ");
+  assert(strstr(out, "Bot test OK") == NULL);
 
   result = run_command("!hello", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
   assert(strcmp(out, "Hello from cm-bot") == 0);
+
+  {
+    BotCommand command;
+    assert(FirmwareBot::parseCommand("!hello", 6, &command));
+    BotCommandContext context = make_context();
+    strncpy(context.response_target, "alice", sizeof(context.response_target) - 1);
+    result = BotCommands::executeCommand(command, context, out, sizeof(out));
+    assert(result.code == BOT_COMMAND_RESULT_OK);
+    assert(strcmp(out, "Hello @[alice], from cm-bot") == 0);
+  }
 
   result = run_command("!about", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
@@ -552,60 +668,71 @@ static void test_command_outputs() {
 
   result = run_command("!help", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "Cmds: help cmd ping") == out);
+  assert_starts_with(out, "Commands: help, cmd, ping");
   assert(result.text_len <= BOT_MAX_GROUP_RESPONSE_LEN);
-  assert(strstr(out, "roll") != NULL);
-  assert(strstr(out, "dice") != NULL);
-  assert(strstr(out, "trace") != NULL);
-  assert(strstr(out, "tracer") != NULL);
-  assert(strstr(out, "prefix") != NULL);
-  assert(strstr(out, "help <command>") != NULL);
+  assert_contains(out, "roll");
+  assert_contains(out, "dice");
+  assert_contains(out, "trace");
+  assert_contains(out, "tracer");
+  assert_contains(out, "prefix");
+  assert_contains(out, "help <command>");
   assert(strstr(out, "weather") == NULL);
 
   result = run_command("!cmd", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "help cmd ping test hello about roll dice") == out);
-  assert(strstr(out, "trace") != NULL);
-  assert(strstr(out, "tracer") != NULL);
-  assert(strstr(out, "prefix") != NULL);
+  assert_starts_with(out, "Commands: test, ping, help, hello, about");
+  assert_contains(out, "prefix");
+  assert_contains(out, "path");
+  assert_contains(out, "dice");
+  assert_contains(out, "roll");
+  assert_contains(out, "stats");
+  assert_contains(out, "time");
+  assert_contains(out, "lora");
+  assert_contains(out, "id");
+  assert_contains(out, "neighbors");
+  assert_contains(out, ", ");
   assert(strstr(out, "weather") == NULL);
 
   result = run_command("!help roll", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "roll: Roll within a numeric range.") == out);
-  assert(strstr(out, "Usage: roll [max|low high]") != NULL);
+  assert_starts_with(out, "roll: Roll a random number between 1 and X");
+  assert_contains(out, "Usage: roll [max|low high]");
 
   result = run_command("!help dice", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "dice: Roll dice notation") == out);
-  assert(strstr(out, "Usage: dice [dN|NdN]") != NULL);
+  assert_starts_with(out, "dice: Roll dice for tabletop games");
+  assert_contains(out, "Usage: dice [NdX|dX|decade]");
 
   result = run_command("!help trace", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "trace: Send a bounded active trace request") == out);
-  assert(strstr(out, "Usage: trace [hex-path]") != NULL);
+  assert_starts_with(out, "trace: Run link trace");
+  assert_contains(out, "Usage: trace [path]");
 
   result = run_command("!help tracer", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "tracer: Show the current packet route hashes") == out);
-  assert(strstr(out, "Usage: tracer") != NULL);
+  assert_starts_with(out, "tracer: Run link trace");
+  assert_contains(out, "Usage: tracer [path]");
 
   result = run_command("!help t", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "test: Return a short firmware bot self-test response") == out);
+  assert_starts_with(out, "test: Get test response with connection info");
 
   result = run_command("!help weather", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "weather is unavailable in firmware") == 0);
+  assert(strcmp(out, "No help for weather") == 0);
 
   result = run_command("!help prefix", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "prefix: Look up a local contact by public-key prefix") == out);
-  assert(strstr(out, "Usage: prefix <hex>") != NULL);
+  assert_starts_with(out, "prefix: Look up a local contact by public-key prefix");
+  assert_contains(out, "Usage: prefix <hex>");
 
   result = run_command("!prefix 01020304", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Prefix lookup unavailable") == 0);
+  assert(strcmp(out, "Prefix lookup requires local contacts") == 0);
+
+  result = run_command("!lookup 0102", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Prefix lookup requires local contacts") == 0);
 
   result = run_command("!help nope", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
@@ -613,15 +740,15 @@ static void test_command_outputs() {
 
   result = run_command("!weather", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "weather is unavailable in firmware") == 0);
+  assert(strcmp(out, "Unknown command. Try help") == 0);
 
   result = run_command("!reboot now", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "reboot is unavailable in firmware") == 0);
+  assert(strcmp(out, "Unknown command. Try help") == 0);
 
   result = run_command("!nodes", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "nodes is unavailable in firmware") == 0);
+  assert(strcmp(out, "Unknown command. Try help") == 0);
 
   result = run_command("!version", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
@@ -629,8 +756,8 @@ static void test_command_outputs() {
 
   result = run_command("!stats", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "Bot seen 9 ok 5 sent 4 fail 1") != NULL);
-  assert(strstr(out, "rf rx/tx 77/44") != NULL);
+  assert(strstr(out, "Bot: 9 seen, 5 ok, 4 sent, 1 fail") != NULL);
+  assert(strstr(out, "RF: 77 rx, 44 tx, 2 err, q 3") != NULL);
 
   result = run_command("!magic8", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
@@ -642,28 +769,32 @@ static void test_command_outputs() {
 
   result = run_command("!trace", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Trace route unavailable") == 0);
+  assert(strcmp(out, "Trace needs a known route. Try path first.") == 0);
 
   result = run_command("!trace zz", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Usage: trace [hex-path]") == 0);
+  assert(strcmp(out, "Usage: trace [path]") == 0);
+
+  result = run_command("!trace 01,7a,55", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Trace ready: 3-hop route") == 0);
 
   result = run_command("!tracer", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Tracer unavailable") == 0);
+  assert(strcmp(out, "Tracer needs a known route. Try path first.") == 0);
 
   result = run_command("!tracer 1234", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Usage: tracer") == 0);
+  assert(strcmp(out, "Tracer ready: 1-hop route") == 0);
 
   result = run_command("!channels", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Channels: #bot #testing emergency=#emergency public=Public (4 configured)") == 0);
+  assert(strcmp(out, "Channels: bot #bot | testing #testing | emergency #emergency | public Public (4 total)") == 0);
 
   result = run_command("!status", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "cm-bot up 1234s") != NULL);
-  assert(strstr(out, "batt 4180mV") != NULL);
+  assert(strstr(out, "cm-bot | up 0d 0h 20m") != NULL);
+  assert(strstr(out, "batt 4180mV 97%") != NULL);
   assert(strstr(out, "sent 4 fail 1") != NULL);
 
   result = run_command("!wat", out, sizeof(out));
@@ -684,97 +815,183 @@ static void test_path_command() {
   context.path_snr_quarters = 23;
   BotCommandResult result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path 3h x 2B snr 5.75: 1234abcd0001") == 0);
+  assert(strcmp(out, "Path 3h@2B SNR 5.75 | 1234 -> abcd -> 0001") == 0);
 
-  assert(FirmwareBot::parseCommand("!tracer", 7, &command));
+  strncpy(context.response_target, "alice", sizeof(context.response_target) - 1);
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Tracer 3h x 2B snr 5.75: 1234abcd0001") == 0);
+  assert(strcmp(out, "Path @[alice] 3h@2B SNR 5.75 | 1234 -> abcd -> 0001") == 0);
+  context.response_target[0] = 0;
 
-  assert(FirmwareBot::parseCommand("!tracer 1234", 12, &command));
+  assert(FirmwareBot::parseCommand("!path 1234,abcd,0001", 20, &command));
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Usage: tracer") == 0);
+  assert(strcmp(out, "Path 3h@2B | 1234 -> abcd -> 0001") == 0);
+
+  assert(FirmwareBot::parseCommand("!path 1234abcd0001", 18, &command));
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Path 3h@2B | 1234 -> abcd -> 0001") == 0);
+
+  assert(FirmwareBot::parseCommand("!path 12,34", 11, &command));
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Usage: path [path]") == 0);
+
+  assert(FirmwareBot::parseCommand("!path 12345678,abcdef01", 23, &command));
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Usage: path [path]") == 0);
+
+  context.path_hash_size = 0;
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Path 2h@4B | 12345678 -> abcdef01") == 0);
+  context.path_hash_size = 2;
 
   assert(FirmwareBot::parseCommand("!path", 5, &command));
+  context.path = path;
+  context.path_len = 0;
+  context.path_hash_count = 0;
+  context.path_hash_size = 2;
+  context.path_snr_quarters = 0;
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Path direct zero-hop SNR 0.00") == 0);
+
   context.path = NULL;
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path unavailable") == 0);
+  assert(strcmp(out, "Path direct zero-hop SNR 0.00") == 0);
+
+  strncpy(context.response_target, "alice", sizeof(context.response_target) - 1);
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Path @[alice] direct zero-hop SNR 0.00") == 0);
+  context.response_target[0] = 0;
 
   assert(FirmwareBot::parseCommand("!tracer", 7, &command));
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Tracer unavailable") == 0);
+  assert(strcmp(out, "Tracer ready: direct zero-hop route") == 0);
+
+  context.path_hash_size = 0;
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Tracer needs a known route. Try path first.") == 0);
+}
+
+static void test_trace_result_format() {
+  char out[BOT_MAX_RESPONSE_LEN + 1];
+  uint8_t snrs_1b[] = { 0x14, 0x0F, 0x06 };
+  uint8_t hashes_1b[] = { 0x12, 0xab, 0x01 };
+  size_t len = BotCommands::formatTraceResult(out, sizeof(out), NULL, 0xabcd1234UL, 1, snrs_1b, hashes_1b, 3, 18);
+  assert(len == strlen(out));
+  assert(strcmp(out, "Trace abcd1234 3h tail 4.50 | 12@5.00 -> ab@3.75 -> 01@1.50") == 0);
+
+  len = BotCommands::formatTraceResult(out, sizeof(out), "alice", 0xabcd1234UL, 1, snrs_1b, hashes_1b, 3, 18);
+  assert(strcmp(out, "Trace @[alice] abcd1234 3h tail 4.50 | 12@5.00 -> ab@3.75 -> 01@1.50") == 0);
+
+  uint8_t snrs_2b[] = { 0x14, (uint8_t)(int8_t)-5 };
+  uint8_t hashes_2b[] = { 0x12, 0x34, 0xab, 0xcd };
+  len = BotCommands::formatTraceResult(out, sizeof(out), NULL, 0x10000001UL, 2, snrs_2b, hashes_2b, 2, -10);
+  assert(strcmp(out, "Trace 10000001 2h tail -2.50 | 1234@5.00 -> abcd@-1.25") == 0);
+
+  len = BotCommands::formatTraceResult(out, sizeof(out), "bob", 0x5UL, 1, NULL, NULL, 0, 8);
+  assert(len > 0);
+  assert(strcmp(out, "Trace @[bob] 00000005 direct zero-hop tail 2.00") == 0);
+
+  len = BotCommands::formatTraceResult(out, sizeof(out), "", 0x5UL, 1, NULL, NULL, 0, 8);
+  assert(strcmp(out, "Trace 00000005 direct zero-hop tail 2.00") == 0);
+
+  char small[16];
+  len = BotCommands::formatTraceResult(small, sizeof(small), NULL, 0x12345678UL, 1, snrs_1b, hashes_1b, 3, 18);
+  assert(len == strlen(small));
+  assert(len <= sizeof(small) - 1);
+  assert(strncmp(small, "Trace 12345678", 14) == 0);
 }
 
 static void test_dice_command() {
   char out[BOT_MAX_RESPONSE_LEN + 1];
   BotCommandResult result = run_command("!roll", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Rolled 1-100: ", 14) == 0);
+  assert_roll_range(out, "Roll 1-100: ", 1, 100);
 
   result = run_command("!roll 20", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Rolled 1-20: ", 13) == 0);
+  assert_roll_range(out, "Roll 1-20: ", 1, 20);
+
+  result = run_command("!roll 10000", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert_roll_range(out, "Roll 1-10000: ", 1, 10000);
 
   result = run_command("!roll 5 10", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Rolled 5-10: ", 13) == 0);
+  assert_roll_range(out, "Roll 5-10: ", 5, 10);
 
   result = run_command("!roll 1 1", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Rolled 1-1: 1") == 0);
+  assert(strcmp(out, "Roll 1-1: 1") == 0);
 
   result = run_command("!roll 2d6", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Usage: roll [max|low high], range 1-1000") == 0);
+  assert(strcmp(out, "Invalid number. Use roll, roll X, or roll low high (max 10000)") == 0);
 
   result = run_command("!roll 0", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: roll", 11) == 0);
+  assert_starts_with(out, "Invalid number.");
 
   result = run_command("!roll 10 1", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: roll", 11) == 0);
+  assert_starts_with(out, "Invalid number.");
 
-  result = run_command("!roll 100000", out, sizeof(out));
+  result = run_command("!roll 10001", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: roll", 11) == 0);
+  assert_starts_with(out, "Invalid number.");
 
   result = run_command("!dice", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Dice d6: ", 9) == 0);
+  assert_dice_single_range(out, "Dice d6: ", 6);
 
   result = run_command("!dice d20", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Dice d20: ", 10) == 0);
-
-  result = run_command("!dice 2d6", out, sizeof(out));
-  assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Dice 2d6: ", 10) == 0);
-  assert(strchr(out, '+') != NULL);
-  assert(strchr(out, '=') != NULL);
+  assert_dice_single_range(out, "Dice d20: ", 20);
 
   result = run_command("!dice 20", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Usage: dice [dN|NdN], max 10 dice, sides 2-1000") == 0);
+  assert_dice_single_range(out, "Dice d20: ", 20);
+
+  result = run_command("!dice 2d6", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert_starts_with(out, "Dice 2d6: [");
+  assert(strchr(out, ',') != NULL);
+  assert(strchr(out, '=') != NULL);
+
+  result = run_command("!dice d10 d6", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert_starts_with(out, "Dice d10: ");
+  assert_contains(out, " + d6: ");
+  assert_contains(out, " | Total: ");
+
+  result = run_command("!dice decade", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert_starts_with(out, "Dice decade: ");
 
   result = run_command("!dice d1", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: dice", 11) == 0);
+  assert_starts_with(out, "Invalid dice type.");
 
   result = run_command("!dice 0d6", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: dice", 11) == 0);
+  assert_starts_with(out, "Invalid dice type.");
 
   result = run_command("!dice 11d6", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: dice", 11) == 0);
+  assert_starts_with(out, "Invalid dice type.");
 
   result = run_command("!dice 2d1001", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strncmp(out, "Usage: dice", 11) == 0);
+  assert_starts_with(out, "Invalid dice type.");
 }
 
 static void test_command_truncation() {
@@ -801,6 +1018,12 @@ static void test_command_cooldown() {
   FirmwareBot::recordCommandCooldown(cooldowns, 2, BOT_COMMAND_STATUS, 0xFFFFFFF0UL, 32);
   assert(FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_STATUS, 0xFFFFFFF8UL));
   assert(!FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_STATUS, 0x00000010UL));
+
+  memset(cooldowns, 0, sizeof(cooldowns));
+  FirmwareBot::recordCommandCooldown(cooldowns, 2, BOT_COMMAND_TRACER, 2000, 5000);
+  assert(FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_TRACE, 6999));
+  assert(FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_TRACER, 6999));
+  assert(!FirmwareBot::isCommandOnCooldown(cooldowns, 2, BOT_COMMAND_TRACE, 7000));
 }
 
 static void test_group_response_cap() {
@@ -817,7 +1040,7 @@ static void test_emergency_forward_short() {
   assert(EmergencyForwarder::format(message, forward));
   assert(forward.part_count == 1);
   assert(!forward.truncated);
-  assert(strstr(forward.parts[0], "EMERGENCY MESSAGE FROM alice: need help at trailhead") == forward.parts[0]);
+  assert(strstr(forward.parts[0], "EMERGENCY MESSAGE FROM @[alice]: need help at trailhead") == forward.parts[0]);
   assert(forward.part_lens[0] == strlen(forward.parts[0]));
 }
 
@@ -845,7 +1068,7 @@ static void test_emergency_forward_multipart() {
   assert(forward.part_count <= BOT_EMERGENCY_MAX_PARTS);
   assert(!forward.truncated);
   for (uint8_t i = 0; i < forward.part_count; i++) {
-    assert(strstr(forward.parts[i], "EMERGENCY MESSAGE FROM alice: ") == forward.parts[i]);
+    assert(strstr(forward.parts[i], "EMERGENCY MESSAGE FROM @[alice]: ") == forward.parts[i]);
     assert(strstr(forward.parts[i], "[") != NULL);
     assert(forward.part_lens[i] <= BOT_MAX_GROUP_RESPONSE_LEN);
   }
@@ -1094,10 +1317,10 @@ static void test_response_coordinator_suppression_uses_response_fingerprint() {
 
 static void test_trace_final_response_fingerprints_use_final_text() {
   BotMessage message = make_message("#bot", "trace");
-  BotFingerprint sent = final_response_fingerprint_for(message, "Trace sent");
-  BotFingerprint result_a = final_response_fingerprint_for(message, "Trace 12345678 2h x 2B snr 1.25: 11112222");
-  BotFingerprint result_b = final_response_fingerprint_for(message, "Trace 12345678 2h x 2B snr 1.25: aaaabbbb");
-  BotFingerprint timeout = final_response_fingerprint_for(message, "Trace timed out");
+  BotFingerprint sent = final_response_fingerprint_for(message, "Trace sent on 2-hop route");
+  BotFingerprint result_a = final_response_fingerprint_for(message, "Trace 12345678 2h tail 1.25 | 1111@1.00 -> 2222@1.25");
+  BotFingerprint result_b = final_response_fingerprint_for(message, "Trace 12345678 2h tail 1.25 | aaaa@1.00 -> bbbb@1.25");
+  BotFingerprint timeout = final_response_fingerprint_for(message, "Trace 12345678 timed out, no reply on 2-hop route");
   assert(sent.value != result_a.value);
   assert(result_a.value != result_b.value);
   assert(timeout.value != sent.value);
@@ -1120,8 +1343,10 @@ static void test_response_coordinator_distinct_path_outputs() {
   second.path_hash_count = 2;
   BotFingerprint first_request = FirmwareBot::fingerprintFor(first);
   BotFingerprint second_request = FirmwareBot::fingerprintFor(second);
-  BotFingerprint first_response = FirmwareBot::responseFingerprintFor(first, "Path 2h x 2B snr 0.00: 12345678", 34);
-  BotFingerprint second_response = FirmwareBot::responseFingerprintFor(second, "Path 2h x 2B snr 0.00: abcdef01", 34);
+  const char* first_path_response = "Path 2h@2B SNR 0.00 | 1234 -> 5678";
+  const char* second_path_response = "Path 2h@2B SNR 0.00 | abcd -> ef01";
+  BotFingerprint first_response = FirmwareBot::responseFingerprintFor(first, first_path_response, strlen(first_path_response));
+  BotFingerprint second_response = FirmwareBot::responseFingerprintFor(second, second_path_response, strlen(second_path_response));
   BotFingerprint scheduled;
   uint32_t first_due = 0;
   uint32_t second_due = 0;
@@ -1169,14 +1394,14 @@ static void test_response_coordinator_group_guarded_path_output_suppresses() {
   ResponseCoordinator::clear(pending, 1);
   BotMessage request_message = make_message("#bot", "path");
   BotFingerprint request = FirmwareBot::fingerprintFor(request_message);
-  const char* path_text = "Path 2h x 2B snr 0.00: 12345678";
+  const char* path_text = "Path 2h@2B SNR 0.00 | 1234 -> 5678";
   char final_response[BOT_MAX_RESPONSE_LEN + 1];
   size_t final_response_len = 0;
   assert(FirmwareBot::writeResponseForChannel(request_message.channel_kind,
                                               BotPolicy::isPrefixlessCommandAllowed(request_message.channel_kind),
                                               path_text, strlen(path_text), final_response, sizeof(final_response),
                                               &final_response_len) == BOT_WRITE_OK);
-  assert(strcmp(final_response, "# Path 2h x 2B snr 0.00: 12345678") == 0);
+  assert(strcmp(final_response, "# Path 2h@2B SNR 0.00 | 1234 -> 5678") == 0);
   BotCommand command;
   assert(!FirmwareBot::parseCommand(final_response, final_response_len, &command, true));
   BotFingerprint response = FirmwareBot::responseFingerprintFor(request_message, final_response, final_response_len);
@@ -1203,7 +1428,8 @@ static void test_response_coordinator_suppress_expire_full() {
   BotFingerprint first_request = FirmwareBot::fingerprintFor(message);
   BotFingerprint second_request = FirmwareBot::fingerprintFor(second_message);
   BotFingerprint first_response = FirmwareBot::responseFingerprintFor(message, "Pong!", 5);
-  BotFingerprint second_response = FirmwareBot::responseFingerprintFor(second_message, "Bot test OK", 11);
+  const char* ack_response = "ack @[alice] | direct | Received at: 21:25:45";
+  BotFingerprint second_response = FirmwareBot::responseFingerprintFor(second_message, ack_response, strlen(ack_response));
   BotFingerprint scheduled;
   uint32_t due = 0;
   uint32_t identity_seed = 0x11223344UL;
@@ -1268,6 +1494,26 @@ static void test_response_coordinator_cancel_by_request() {
   assert(ready.response_fingerprint.value == response.value);
 }
 
+static void test_response_coordinator_schedule_preserves_suppression() {
+  BotCoordinatorPending pending[1];
+  ResponseCoordinator::clear(pending, 1);
+  BotMessage message = make_message("#bot", "!ping");
+  BotFingerprint request = FirmwareBot::fingerprintFor(message);
+  BotFingerprint response = FirmwareBot::responseFingerprintFor(message, "Pong!", 5);
+  BotFingerprint scheduled;
+  uint32_t due = 0;
+
+  assert(ResponseCoordinator::schedule(pending, 1, message, BOT_COMMAND_PING, request, response, 1000, 0,
+                                       0x01020304UL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
+  assert(ResponseCoordinator::suppress(pending, 1, response));
+  assert(pending[0].suppressed);
+  assert(ResponseCoordinator::schedule(pending, 1, message, BOT_COMMAND_PING, request, response, 1500, 0,
+                                       0x01020304UL, 0, &scheduled, &due) == BOT_COORDINATOR_REPLACED);
+  assert(pending[0].suppressed);
+  BotCoordinatorReady ready = ResponseCoordinator::poll(pending, 1, 1500);
+  assert(ready.result == BOT_COORDINATOR_READY_SUPPRESSED);
+}
+
 static void test_response_coordinator_delay_biases() {
   BotMessage message = make_message("#bot", "!ping");
   BotFingerprint request = { 0x0123456789ABCDEFULL };
@@ -1278,12 +1524,86 @@ static void test_response_coordinator_delay_biases() {
   uint32_t trace = ResponseCoordinator::responseDelayMillis(message, BOT_COMMAND_TRACE, request, 0x01020304UL, 0, 0);
   uint32_t tracer = ResponseCoordinator::responseDelayMillis(message, BOT_COMMAND_TRACER, request, 0x01020304UL, 0, 0);
   assert(first != second);
-  assert(roll == dice);
-  assert(roll == first + 200);
-  assert(trace == tracer);
-  assert(trace == first + 800);
+  assert(roll == first);
+  assert(dice == first);
+  assert(trace == first);
+  assert(tracer == first);
   assert(ResponseCoordinator::responseDelayMillis(message, BOT_COMMAND_PING, request, 0x01020304UL, 2,
                                                   BOT_RESPONSE_DELAY_JITTER_MILLIS + 17) == first + 300 + 17);
+}
+
+static void test_response_coordinator_hop_count_ranking() {
+  BotMessage near = make_message("#bot", "!ping");
+  near.path_hash_count = 0;
+  BotMessage one_hop = near;
+  one_hop.path_hash_count = 1;
+  BotMessage two_hop = near;
+  two_hop.path_hash_count = 2;
+  BotFingerprint request = { 0x0123456789ABCDEFULL };
+  uint32_t base_delay = BOT_RESPONSE_DELAY_BASE_MILLIS;
+  uint32_t jitter = BOT_RESPONSE_DELAY_JITTER_MILLIS;
+  uint16_t hop_step = 1500;
+  uint32_t d0 = ResponseCoordinator::responseDelayMillis(near, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                          base_delay, jitter, hop_step);
+  uint32_t d1 = ResponseCoordinator::responseDelayMillis(one_hop, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                          base_delay, jitter, hop_step);
+  uint32_t d2 = ResponseCoordinator::responseDelayMillis(two_hop, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                          base_delay, jitter, hop_step);
+  assert(d1 == d0 + hop_step);
+  assert(d2 == d0 + (uint32_t)hop_step * 2);
+
+  uint32_t alt_step = 2000;
+  uint32_t d0_alt = ResponseCoordinator::responseDelayMillis(near, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                              base_delay, jitter, alt_step);
+  uint32_t d1_alt = ResponseCoordinator::responseDelayMillis(one_hop, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                              base_delay, jitter, alt_step);
+  assert(d0_alt == d0);
+  assert(d1_alt == d0 + alt_step);
+
+  BotMessage dm = make_message("dm", "!ping");
+  dm.channel_kind = BOT_CHANNEL_DM;
+  dm.path_hash_count = 3;
+  uint32_t dm_delay = ResponseCoordinator::responseDelayMillis(dm, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                                base_delay, jitter, hop_step);
+  BotMessage dm_zero = dm;
+  dm_zero.path_hash_count = 0;
+  uint32_t dm_zero_delay = ResponseCoordinator::responseDelayMillis(dm_zero, BOT_COMMAND_PING, request, 0x01020304UL,
+                                                                     0, 0, base_delay, jitter, hop_step);
+  assert(dm_delay == dm_zero_delay);
+}
+
+static void test_response_coordinator_hop_bias_cap() {
+  BotMessage near = make_message("#bot", "!ping");
+  near.path_hash_count = 0;
+  BotMessage many_hops = near;
+  many_hops.path_hash_count = 10;
+  BotFingerprint request = { 0x0123456789ABCDEFULL };
+  uint32_t base_delay = BOT_RESPONSE_DELAY_BASE_MILLIS;
+  uint32_t jitter = BOT_RESPONSE_DELAY_JITTER_MILLIS;
+  uint16_t hop_step = 1500;
+  uint32_t d0 = ResponseCoordinator::responseDelayMillis(near, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                          base_delay, jitter, hop_step);
+  uint32_t dmany = ResponseCoordinator::responseDelayMillis(many_hops, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                             base_delay, jitter, hop_step);
+  assert(dmany == d0 + BOT_HOP_BIAS_MAX_MILLIS);
+  assert((uint32_t)many_hops.path_hash_count * hop_step > BOT_HOP_BIAS_MAX_MILLIS);
+  assert(dmany + BOT_RESPONSE_DELAY_JITTER_MILLIS < BOT_RESPONSE_PENDING_TTL_MILLIS);
+}
+
+static void test_response_coordinator_same_hop_tiebreak() {
+  BotMessage message = make_message("#bot", "!ping");
+  message.path_hash_count = 2;
+  BotFingerprint request = { 0x0123456789ABCDEFULL };
+  uint16_t hop_step = 1500;
+  uint32_t bot_a = ResponseCoordinator::responseDelayMillis(message, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
+                                                             BOT_RESPONSE_DELAY_BASE_MILLIS,
+                                                             BOT_RESPONSE_DELAY_JITTER_MILLIS, hop_step);
+  uint32_t bot_b = ResponseCoordinator::responseDelayMillis(message, BOT_COMMAND_PING, request, 0xFEDCBA98UL, 0, 0,
+                                                             BOT_RESPONSE_DELAY_BASE_MILLIS,
+                                                             BOT_RESPONSE_DELAY_JITTER_MILLIS, hop_step);
+  assert(bot_a != bot_b);
+  uint32_t spread = bot_a > bot_b ? bot_a - bot_b : bot_b - bot_a;
+  assert(spread < 900);
 }
 
 static void test_response_coordinator_recent_responses() {
@@ -1340,9 +1660,11 @@ int main() {
   test_parse_command();
   test_response_write();
   test_channel_text_and_response_guards();
+  test_ack_response_format();
   test_bot_advert_marker();
   test_command_outputs();
   test_path_command();
+  test_trace_result_format();
   test_dice_command();
   test_command_truncation();
   test_command_cooldown();
@@ -1361,11 +1683,15 @@ int main() {
   test_response_coordinator_suppression_uses_response_fingerprint();
   test_trace_final_response_fingerprints_use_final_text();
   test_response_coordinator_distinct_path_outputs();
+  test_response_coordinator_schedule_preserves_suppression();
   test_response_coordinator_group_observed_response_suppresses();
   test_response_coordinator_group_guarded_path_output_suppresses();
   test_response_coordinator_suppress_expire_full();
   test_response_coordinator_cancel_by_request();
   test_response_coordinator_delay_biases();
+  test_response_coordinator_hop_count_ranking();
+  test_response_coordinator_hop_bias_cap();
+  test_response_coordinator_same_hop_tiebreak();
   test_response_coordinator_recent_responses();
   test_response_coordinator_rejects_non_normal();
   printf("firmware_bot tests passed\n");

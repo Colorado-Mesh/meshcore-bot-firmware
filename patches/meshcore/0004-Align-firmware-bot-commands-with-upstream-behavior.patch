@@ -1,0 +1,1140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 04:12:02 +0000
+Subject: [PATCH 4/5] Align firmware bot commands with upstream behavior
+
+---
+ .../companion_radio/BotCommandRegistry.cpp    |  25 +-
+ examples/companion_radio/BotCommands.cpp      | 404 ++++++++++++++----
+ examples/companion_radio/BotTypes.h           |   2 +
+ examples/companion_radio/FirmwareBot.cpp      |  83 +++-
+ examples/companion_radio/FirmwareBot.h        |   2 +
+ examples/companion_radio/MyMesh.cpp           | 170 ++++++--
+ platformio.ini                                |   1 +
+ 7 files changed, 549 insertions(+), 138 deletions(-)
+
+diff --git a/examples/companion_radio/BotCommandRegistry.cpp b/examples/companion_radio/BotCommandRegistry.cpp
+index 4fcf07a2..49888a7a 100644
+--- a/examples/companion_radio/BotCommandRegistry.cpp
++++ b/examples/companion_radio/BotCommandRegistry.cpp
+@@ -10,12 +10,9 @@ const char* const kTestAliases[] = { "t" };
+ const char* const kHelloAliases[] = { "hi" };
+ const char* const kVersionAliases[] = { "ver" };
+ const char* const kMagic8Aliases[] = { "8ball", "eightball" };
++const char* const kChannelsAliases[] = { "channel" };
+ const char* const kPathAliases[] = { "p", "decode", "route" };
+-const char* const kUnsupportedAliases[] = {
+-  "ack", "bbs", "blacklist", "delete", "download", "email", "heard", "history", "ignore", "info",
+-  "last", "lheard", "location", "map", "mqtt", "nodes", "reboot", "set", "sms", "telemetry",
+-  "upload", "weather", "whereami"
+-};
++const char* const kPrefixAliases[] = { "lookup" };
+ 
+ size_t boundedStrLen(const char* value, size_t max_len) {
+   size_t len = 0;
+@@ -40,18 +37,18 @@ const BotCommandMetadata kCommands[] = {
+   { BOT_COMMAND_PING, "ping", NULL, 0, BOT_COMMAND_MASK_PING, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_NORMAL, "Check bot response", "ping", "Reply with Pong when the bot is alive." },
+   { BOT_COMMAND_TEST, "test", kTestAliases, 1, BOT_COMMAND_MASK_TEST, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+-    BOT_COMMAND_CONTEXT_NORMAL, "Run a bot test", "test", "Return a short firmware bot self-test response." },
++    BOT_COMMAND_CONTEXT_NORMAL, "Test connection", "test [phrase]", "Get test response with connection info" },
+   { BOT_COMMAND_HELLO, "hello", kHelloAliases, 1, BOT_COMMAND_MASK_HELLO, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_NORMAL, "Greet from the node", "hello", "Reply with the local bot node name." },
+   { BOT_COMMAND_ABOUT, "about", NULL, 0, BOT_COMMAND_MASK_ABOUT, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_NORMAL, "Describe this bot", "about", "Describe the local firmware bot." },
+   { BOT_COMMAND_ROLL, "roll", NULL, 0, BOT_COMMAND_MASK_ROLL, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+-    BOT_COMMAND_CONTEXT_NORMAL, "Roll a numeric range", "roll [max|low high]", "Roll within a numeric range." },
++    BOT_COMMAND_CONTEXT_NORMAL, "Roll a number", "roll [max|low high]", "Roll a random number between 1 and X, or between low and high." },
+   { BOT_COMMAND_DICE, "dice", NULL, 0, BOT_COMMAND_MASK_DICE, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+-    BOT_COMMAND_CONTEXT_NORMAL, "Roll dice notation", "dice [dN|NdN]", "Roll dice notation with bounded dice and sides." },
++    BOT_COMMAND_CONTEXT_NORMAL, "Roll dice", "dice [NdX|dX|decade]", "Roll dice for tabletop games using bounded D&D-style notation." },
+   { BOT_COMMAND_STATUS, "status", NULL, 0, BOT_COMMAND_MASK_STATUS, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_DIAGNOSTIC, "Show node status", "status", "Show local uptime, battery, storage, and bot send counters." },
+-  { BOT_COMMAND_CHANNELS, "channels", NULL, 0, BOT_COMMAND_MASK_CHANNELS, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
++  { BOT_COMMAND_CHANNELS, "channels", kChannelsAliases, 1, BOT_COMMAND_MASK_CHANNELS, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_DIAGNOSTIC, "Show configured channels", "channels", "Show local bot, testing, emergency, and public channel names." },
+   { BOT_COMMAND_VERSION, "version", kVersionAliases, 1, BOT_COMMAND_MASK_VERSION, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_NORMAL, "Show firmware version", "version", "Show local firmware version and build date." },
+@@ -60,15 +57,13 @@ const BotCommandMetadata kCommands[] = {
+   { BOT_COMMAND_MAGIC8, "magic8", kMagic8Aliases, 2, BOT_COMMAND_MASK_MAGIC8, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_NORMAL, "Ask the magic 8-ball", "magic8 <question>", "Return a short pseudo-random magic 8-ball answer." },
+   { BOT_COMMAND_PATH, "path", kPathAliases, 3, BOT_COMMAND_MASK_PATH, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+-    BOT_COMMAND_CONTEXT_TRACE, "Show last path", "path", "Show the latest local packet path hashes, hash width, and SNR if available." },
++    BOT_COMMAND_CONTEXT_TRACE, "Show or decode path", "path [hex-path]", "Show or decode bounded packet path hashes using comma-separated or contiguous hex." },
+   { BOT_COMMAND_TRACE, "trace", NULL, 0, BOT_COMMAND_MASK_TRACE, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+-    BOT_COMMAND_CONTEXT_TRACE, "Send active trace", "trace [hex-path]", "Send a bounded active trace request using local MeshCore state." },
++    BOT_COMMAND_CONTEXT_TRACE, "Run link trace", "trace [path]", "Run link trace using local MeshCore state." },
+   { BOT_COMMAND_TRACER, "tracer", NULL, 0, BOT_COMMAND_MASK_TRACER, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+-    BOT_COMMAND_CONTEXT_TRACE, "Show route trace", "tracer", "Show the current packet route hashes without sending an active trace." },
+-  { BOT_COMMAND_PREFIX, "prefix", NULL, 0, BOT_COMMAND_MASK_PREFIX, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
++    BOT_COMMAND_CONTEXT_TRACE, "Run link trace", "tracer [path]", "Run link trace using reciprocal local MeshCore state." },
++  { BOT_COMMAND_PREFIX, "prefix", kPrefixAliases, 1, BOT_COMMAND_MASK_PREFIX, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_LOCAL_CONTACT, "Look up local prefix", "prefix <hex>", "Look up a local contact by public-key prefix using local firmware contacts only." },
+-  { BOT_COMMAND_UNSUPPORTED, "unsupported", kUnsupportedAliases, 23, 0, BOT_COMMAND_VISIBILITY_HIDDEN,
+-    BOT_COMMAND_CONTEXT_UNSUPPORTED, "Unavailable in firmware", "<command>", "This upstream host command is unavailable in firmware." },
+   { BOT_COMMAND_UNKNOWN, "unknown", NULL, 0, 0, BOT_COMMAND_VISIBILITY_INTERNAL,
+     BOT_COMMAND_CONTEXT_INTERNAL, "Unknown command", "unknown", "Internal unknown-command handler." }
+ };
+diff --git a/examples/companion_radio/BotCommands.cpp b/examples/companion_radio/BotCommands.cpp
+index add7feed..f3c9bc0e 100644
+--- a/examples/companion_radio/BotCommands.cpp
++++ b/examples/companion_radio/BotCommands.cpp
+@@ -9,6 +9,28 @@
+ 
+ namespace {
+ 
++const uint16_t kRollMax = 10000;
++const uint8_t kMaxDiceTerms = 10;
++
++struct ParsedPathArg {
++  uint8_t bytes[BOT_MAX_PATH_BYTES];
++  uint8_t byte_len;
++  uint8_t hash_size;
++  uint8_t hash_count;
++};
++
++struct DiceTerm {
++  uint8_t count;
++  uint16_t sides;
++};
++
++struct ParsedDice {
++  DiceTerm terms[kMaxDiceTerms];
++  uint8_t term_count;
++  uint8_t total_count;
++  bool decade;
++};
++
+ BotCommandResult makeResult(BotCommandResultCode code, size_t text_len) {
+   BotCommandResult result = { code, text_len };
+   return result;
+@@ -59,18 +81,28 @@ void appendText(char* output, size_t output_len, size_t* pos, const char* text)
+   output[*pos < output_len ? *pos : output_len - 1] = 0;
+ }
+ 
++void appendFormatted(char* output, size_t output_len, size_t* pos, const char* format, ...) {
++  char temp[32];
++  va_list args;
++  va_start(args, format);
++  int n = vsnprintf(temp, sizeof(temp), format, args);
++  va_end(args);
++  if (n < 0) return;
++  appendText(output, output_len, pos, temp);
++}
++
+ BotCommandResult resultForAppend(char* output, size_t output_len, size_t pos) {
+   if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+   size_t actual = boundedStrLen(output, output_len);
+   return makeResult(pos >= output_len ? BOT_COMMAND_RESULT_TRUNCATED : BOT_COMMAND_RESULT_OK, actual);
+ }
+ 
+-bool parseUInt(const char* text, size_t len, size_t* pos, uint16_t* value) {
++bool parseUInt(const char* text, size_t len, size_t* pos, uint16_t max_value, uint16_t* value) {
+   uint32_t parsed = 0;
+   size_t start = *pos;
+   while (*pos < len && isdigit((unsigned char)text[*pos])) {
+     parsed = parsed * 10 + (uint32_t)(text[*pos] - '0');
+-    if (parsed > 1000) return false;
++    if (parsed > max_value) return false;
+     (*pos)++;
+   }
+   if (*pos == start) return false;
+@@ -78,8 +110,17 @@ bool parseUInt(const char* text, size_t len, size_t* pos, uint16_t* value) {
+   return true;
+ }
+ 
+-bool isSupportedSides(uint16_t sides) {
+-  return sides >= 2 && sides <= 1000;
++bool textEqualsIgnoreCase(const char* text, size_t len, const char* expected) {
++  size_t expected_len = boundedStrLen(expected, BOT_MAX_COMMAND_ARGS_LEN + 1);
++  if (len != expected_len) return false;
++  for (size_t i = 0; i < len; i++) {
++    if (tolower((unsigned char)text[i]) != tolower((unsigned char)expected[i])) return false;
++  }
++  return true;
++}
++
++bool isSupportedDiceSides(uint16_t sides) {
++  return sides == 4 || sides == 6 || sides == 8 || sides == 10 || sides == 12 || sides == 20 || sides == 100;
+ }
+ 
+ void skipSpaces(const char* text, size_t len, size_t* pos) {
+@@ -95,7 +136,7 @@ bool parseRoll(const BotCommand& command, uint16_t* low, uint16_t* high) {
+   size_t len = command.args_len;
+   size_t pos = 0;
+   uint16_t first = 0;
+-  if (!parseUInt(text, len, &pos, &first) || first == 0) return false;
++  if (!parseUInt(text, len, &pos, kRollMax, &first) || first == 0) return false;
+ 
+   skipSpaces(text, len, &pos);
+   if (pos == len) {
+@@ -104,7 +145,7 @@ bool parseRoll(const BotCommand& command, uint16_t* low, uint16_t* high) {
+   }
+ 
+   uint16_t second = 0;
+-  if (!parseUInt(text, len, &pos, &second) || second == 0) return false;
++  if (!parseUInt(text, len, &pos, kRollMax, &second) || second == 0) return false;
+   skipSpaces(text, len, &pos);
+   if (pos != len || first > second) return false;
+ 
+@@ -113,26 +154,61 @@ bool parseRoll(const BotCommand& command, uint16_t* low, uint16_t* high) {
+   return true;
+ }
+ 
+-bool parseDice(const BotCommand& command, uint16_t* count, uint16_t* sides) {
+-  *count = 1;
+-  *sides = 6;
+-  if (command.args_len == 0) return true;
++bool parseDiceTerm(const char* text, size_t len, size_t* pos, DiceTerm* term) {
++  uint16_t first = 0;
++  term->count = 1;
++  term->sides = 6;
++
++  if (*pos >= len) return false;
++  if (text[*pos] == 'd' || text[*pos] == 'D') {
++    (*pos)++;
++    if (!parseUInt(text, len, pos, 1000, &term->sides)) return false;
++  } else {
++    if (!parseUInt(text, len, pos, kRollMax, &first)) return false;
++    if (*pos < len && (text[*pos] == 'd' || text[*pos] == 'D')) {
++      if (first == 0 || first > 10) return false;
++      term->count = (uint8_t)first;
++      (*pos)++;
++      if (!parseUInt(text, len, pos, 1000, &term->sides)) return false;
++    } else {
++      term->sides = first;
++    }
++  }
++
++  return term->count >= 1 && term->count <= 10 && isSupportedDiceSides(term->sides);
++}
++
++bool parseDice(const BotCommand& command, ParsedDice* parsed) {
++  memset(parsed, 0, sizeof(*parsed));
++  if (command.args_len == 0) {
++    parsed->terms[0].count = 1;
++    parsed->terms[0].sides = 6;
++    parsed->term_count = 1;
++    parsed->total_count = 1;
++    return true;
++  }
+ 
+   const char* text = command.args;
+   size_t len = command.args_len;
+-  size_t pos = 0;
++  if (textEqualsIgnoreCase(text, len, "decade")) {
++    parsed->decade = true;
++    return true;
++  }
+ 
+-  if (text[pos] == 'd' || text[pos] == 'D') {
+-    pos++;
+-    if (!parseUInt(text, len, &pos, sides)) return false;
+-  } else {
+-    if (!parseUInt(text, len, &pos, count)) return false;
+-    if (pos >= len || (text[pos] != 'd' && text[pos] != 'D')) return false;
+-    pos++;
+-    if (!parseUInt(text, len, &pos, sides)) return false;
++  size_t pos = 0;
++  while (pos < len) {
++    skipSpaces(text, len, &pos);
++    if (pos >= len) break;
++    if (parsed->term_count >= kMaxDiceTerms) return false;
++    DiceTerm* term = &parsed->terms[parsed->term_count];
++    if (!parseDiceTerm(text, len, &pos, term)) return false;
++    parsed->total_count = (uint8_t)(parsed->total_count + term->count);
++    if (parsed->total_count > 10) return false;
++    parsed->term_count++;
++    if (pos < len && text[pos] != ' ') return false;
+   }
+ 
+-  return pos == len && *count >= 1 && *count <= 10 && isSupportedSides(*sides);
++  return parsed->term_count > 0;
+ }
+ 
+ uint16_t rollOnce(uint32_t* state, uint16_t sides) {
+@@ -140,6 +216,75 @@ uint16_t rollOnce(uint32_t* state, uint16_t sides) {
+   return (uint16_t)((*state >> 16) % sides) + 1;
+ }
+ 
++int hexValue(char c) {
++  if (c >= '0' && c <= '9') return c - '0';
++  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
++  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
++  return -1;
++}
++
++bool parseHexByte(const char* text, uint8_t* value) {
++  int hi = hexValue(text[0]);
++  int lo = hexValue(text[1]);
++  if (hi < 0 || lo < 0) return false;
++  *value = (uint8_t)((hi << 4) | lo);
++  return true;
++}
++
++bool parsePathArgument(const char* text, size_t len, uint8_t configured_hash_size, ParsedPathArg* parsed) {
++  memset(parsed, 0, sizeof(*parsed));
++  if (!text || len == 0) return false;
++  if (configured_hash_size != 0 && configured_hash_size != 1 && configured_hash_size != 2 && configured_hash_size != 4) return false;
++
++  bool has_comma = false;
++  for (size_t i = 0; i < len; i++) {
++    if (text[i] == ',') has_comma = true;
++  }
++
++  if (has_comma) {
++    size_t pos = 0;
++    size_t chunk_hex_len = 0;
++    while (pos < len) {
++      size_t start = pos;
++      while (pos < len && text[pos] != ',') {
++        if (hexValue(text[pos]) < 0) return false;
++        pos++;
++      }
++      size_t token_len = pos - start;
++      if (token_len != 2 && token_len != 4 && token_len != 8) return false;
++      if (configured_hash_size != 0 && token_len != (size_t)configured_hash_size * 2) return false;
++      if (chunk_hex_len == 0) chunk_hex_len = token_len;
++      if (token_len != chunk_hex_len) return false;
++      if ((size_t)parsed->byte_len + (token_len / 2) > sizeof(parsed->bytes)) return false;
++      for (size_t i = 0; i < token_len; i += 2) {
++        if (!parseHexByte(&text[start + i], &parsed->bytes[parsed->byte_len])) return false;
++        parsed->byte_len++;
++      }
++      parsed->hash_count++;
++      if (pos < len) {
++        pos++;
++        if (pos == len) return false;
++      }
++    }
++    parsed->hash_size = (uint8_t)(chunk_hex_len / 2);
++    return parsed->hash_size != 0 && parsed->hash_count != 0;
++  }
++
++  if ((len % 2) != 0 || len / 2 > sizeof(parsed->bytes)) return false;
++  for (size_t i = 0; i < len; i++) {
++    if (hexValue(text[i]) < 0) return false;
++  }
++  parsed->byte_len = (uint8_t)(len / 2);
++  if (parsed->byte_len == 0) return false;
++  for (size_t i = 0; i < parsed->byte_len; i++) {
++    if (!parseHexByte(&text[i * 2], &parsed->bytes[i])) return false;
++  }
++  parsed->hash_size = configured_hash_size != 0 ? configured_hash_size : ((parsed->byte_len % 2) == 0 ? 2 : 1);
++  if ((parsed->byte_len % parsed->hash_size) != 0) return false;
++  parsed->hash_count = (uint8_t)(parsed->byte_len / parsed->hash_size);
++  return parsed->hash_count != 0;
++}
++
+ void appendPathHex(char* output, size_t output_len, size_t* pos, const uint8_t* path, size_t path_len) {
+   static const char hex[] = "0123456789abcdef";
+   for (size_t i = 0; i < path_len; i++) {
+@@ -152,6 +297,14 @@ void appendPathHex(char* output, size_t output_len, size_t* pos, const uint8_t*
+   if (output_len > 0) output[*pos < output_len ? *pos : output_len - 1] = 0;
+ }
+ 
++void appendPathHops(char* output, size_t output_len, size_t* pos, const uint8_t* path, uint8_t hash_size,
++                    uint8_t hash_count) {
++  for (uint8_t hop = 0; hop < hash_count; hop++) {
++    if (hop != 0) appendText(output, output_len, pos, " -> ");
++    appendPathHex(output, output_len, pos, &path[(size_t)hop * hash_size], hash_size);
++  }
++}
++
+ void formatQuarters(int8_t quarters, char* output, size_t output_len) {
+   if (!output || output_len == 0) return;
+   int value = quarters;
+@@ -160,44 +313,49 @@ void formatQuarters(int8_t quarters, char* output, size_t output_len) {
+   snprintf(output, output_len, "%s%d.%02d", sign, value / 4, (value % 4) * 25);
+ }
+ 
+-BotCommandResult executeCmd(char* output, size_t output_len) {
+-  if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+-  output[0] = 0;
+-  size_t pos = 0;
++void appendCommandList(char* output, size_t output_len, size_t* pos, const BotCommandId* ids, size_t id_count) {
+   bool first = true;
+-  for (size_t i = 0; i < BotCommandRegistry::commandCount(); i++) {
+-    const BotCommandMetadata* command = BotCommandRegistry::commandAt(i);
++  for (size_t i = 0; i < id_count; i++) {
++    const BotCommandMetadata* command = BotCommandRegistry::findById(ids[i]);
+     if (!command || command->visibility != BOT_COMMAND_VISIBILITY_DISCOVERABLE) continue;
+-    if (!first) appendText(output, output_len, &pos, " ");
+-    appendText(output, output_len, &pos, command->name);
++    if (!first) appendText(output, output_len, pos, ", ");
++    appendText(output, output_len, pos, command->name);
+     first = false;
+   }
++}
++
++BotCommandResult executeCmd(char* output, size_t output_len) {
++  static const BotCommandId ids[] = {
++    BOT_COMMAND_TEST, BOT_COMMAND_PING, BOT_COMMAND_HELP, BOT_COMMAND_HELLO, BOT_COMMAND_CMD, BOT_COMMAND_ABOUT,
++    BOT_COMMAND_ROLL, BOT_COMMAND_DICE, BOT_COMMAND_STATUS, BOT_COMMAND_CHANNELS, BOT_COMMAND_VERSION,
++    BOT_COMMAND_STATS, BOT_COMMAND_MAGIC8, BOT_COMMAND_PATH, BOT_COMMAND_TRACE, BOT_COMMAND_TRACER,
++    BOT_COMMAND_PREFIX
++  };
++  if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++  output[0] = 0;
++  size_t pos = 0;
++  appendText(output, output_len, &pos, "Available commands: ");
++  appendCommandList(output, output_len, &pos, ids, sizeof(ids) / sizeof(ids[0]));
+   return resultForAppend(output, output_len, pos);
+ }
+ 
+ BotCommandResult executeHelp(const BotCommand& command, char* output, size_t output_len) {
+   if (command.args_len == 0) {
++    static const BotCommandId ids[] = {
++      BOT_COMMAND_HELP, BOT_COMMAND_CMD, BOT_COMMAND_PING, BOT_COMMAND_TEST, BOT_COMMAND_HELLO, BOT_COMMAND_ROLL,
++      BOT_COMMAND_DICE, BOT_COMMAND_TRACE, BOT_COMMAND_TRACER, BOT_COMMAND_PREFIX
++    };
+     if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+     output[0] = 0;
+     size_t pos = 0;
+-    appendText(output, output_len, &pos, "Cmds: ");
+-    bool first = true;
+-    for (size_t i = 0; i < BotCommandRegistry::commandCount(); i++) {
+-      const BotCommandMetadata* metadata = BotCommandRegistry::commandAt(i);
+-      if (!metadata || metadata->visibility != BOT_COMMAND_VISIBILITY_DISCOVERABLE) continue;
+-      if (!first) appendText(output, output_len, &pos, " ");
+-      appendText(output, output_len, &pos, metadata->name);
+-      first = false;
+-    }
++    appendText(output, output_len, &pos, "Commands: ");
++    appendCommandList(output, output_len, &pos, ids, sizeof(ids) / sizeof(ids[0]));
+     appendText(output, output_len, &pos, "; help <command>");
+     return resultForAppend(output, output_len, pos);
+   }
+ 
+   const BotCommandMetadata* metadata = BotCommandRegistry::findByName(command.args, command.args_len);
+   if (!metadata) return writeFormatted(output, output_len, "No help for %s", command.args);
+-  if (metadata->id == BOT_COMMAND_UNSUPPORTED) {
+-    return writeFormatted(output, output_len, "%s is unavailable in firmware", command.args);
+-  }
+   if (metadata->visibility != BOT_COMMAND_VISIBILITY_DISCOVERABLE) {
+     return writeFormatted(output, output_len, "%s is not available", command.args);
+   }
+@@ -215,78 +373,157 @@ BotCommandResult executeMagic8(const BotCommandContext& context, char* output, s
+ }
+ 
+ BotCommandResult executePathLike(const BotCommandContext& context, char* output, size_t output_len, const char* label) {
+-  if (!context.path || context.path_len == 0 || context.path_hash_count == 0 || context.path_hash_size == 0) {
+-    return writeFormatted(output, output_len, "%s unavailable", label);
+-  }
++  if (context.path_hash_size == 0) return writeFormatted(output, output_len, "%s unavailable", label);
+   if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+ 
+-  size_t byte_len = (size_t)context.path_hash_size * context.path_hash_count;
+   char snr[8];
+   formatQuarters(context.path_snr_quarters, snr, sizeof(snr));
+-  int written = snprintf(output, output_len, "%s %uh x %uB snr %s: ", label, (unsigned)context.path_hash_count,
+-                         (unsigned)context.path_hash_size, snr);
++  const char* target = context.response_target[0] ? context.response_target : NULL;
++  if (context.path_hash_count == 0 || context.path_len == 0) {
++    if (target) return writeFormatted(output, output_len, "%s @[%s] route: direct zero-hop, SNR %s", label, target, snr);
++    return writeFormatted(output, output_len, "%s route: direct zero-hop, SNR %s", label, snr);
++  }
++  if (!context.path) return writeFormatted(output, output_len, "%s unavailable", label);
++
++  int written = target ? snprintf(output, output_len, "%s @[%s] route: %u hop%s, %u-byte hashes, SNR %s | ", label,
++                                  target, (unsigned)context.path_hash_count,
++                                  context.path_hash_count == 1 ? "" : "s", (unsigned)context.path_hash_size, snr)
++                       : snprintf(output, output_len, "%s route: %u hop%s, %u-byte hashes, SNR %s | ", label,
++                                  (unsigned)context.path_hash_count, context.path_hash_count == 1 ? "" : "s",
++                                  (unsigned)context.path_hash_size, snr);
++  if (written < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++  size_t pos = (size_t)written;
++  appendPathHops(output, output_len, &pos, context.path, context.path_hash_size, context.path_hash_count);
++  size_t actual = boundedStrLen(output, output_len);
++  return makeResult(pos >= output_len ? BOT_COMMAND_RESULT_TRUNCATED : BOT_COMMAND_RESULT_OK, actual);
++}
++
++BotCommandResult executePathArg(const BotCommand& command, const BotCommandContext& context, char* output, size_t output_len) {
++  ParsedPathArg path;
++  if (!parsePathArgument(command.args, command.args_len, context.path_hash_size, &path)) return writeText(output, output_len, "Usage: path [path]");
++  if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++  int written = snprintf(output, output_len, "Path route: %u hop%s, %u-byte hashes | ", (unsigned)path.hash_count,
++                         path.hash_count == 1 ? "" : "s", (unsigned)path.hash_size);
+   if (written < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+   size_t pos = (size_t)written;
+-  appendPathHex(output, output_len, &pos, context.path, byte_len);
++  appendPathHops(output, output_len, &pos, path.bytes, path.hash_size, path.hash_count);
+   size_t actual = boundedStrLen(output, output_len);
+   return makeResult(pos >= output_len ? BOT_COMMAND_RESULT_TRUNCATED : BOT_COMMAND_RESULT_OK, actual);
+ }
+ 
+-BotCommandResult executePath(const BotCommandContext& context, char* output, size_t output_len) {
++BotCommandResult executePath(const BotCommand& command, const BotCommandContext& context, char* output, size_t output_len) {
++  if (command.args_len != 0) return executePathArg(command, context, output, output_len);
+   return executePathLike(context, output, output_len, "Path");
+ }
+ 
+-BotCommandResult executeTracer(const BotCommand& command, const BotCommandContext& context, char* output, size_t output_len) {
+-  if (command.args_len != 0) return writeText(output, output_len, "Usage: tracer");
+-  return executePathLike(context, output, output_len, "Tracer");
++BotCommandResult executeTraceLike(const BotCommand& command, const BotCommandContext& context, const char* label,
++                                  const char* usage, char* output, size_t output_len) {
++  if (command.args_len == 0) {
++    if (context.path_hash_size == 0) {
++      return writeFormatted(output, output_len, "%s needs a known route. Try path first.", label);
++    }
++    if (context.path_hash_count == 0 || context.path_len == 0) return writeFormatted(output, output_len, "%s pending on direct zero-hop route", label);
++    if (!context.path) return writeFormatted(output, output_len, "%s needs a known route. Try path first.", label);
++    return writeFormatted(output, output_len, "%s pending on %u-hop route", label, (unsigned)context.path_hash_count);
++  }
++  ParsedPathArg path;
++  if (!parsePathArgument(command.args, command.args_len, context.path_hash_size, &path)) {
++    return writeFormatted(output, output_len, "Usage: %s [path]", usage);
++  }
++  return writeFormatted(output, output_len, "%s pending on %u-hop route", label, (unsigned)path.hash_count);
+ }
+ 
+ BotCommandResult executeRoll(const BotCommand& command, const BotCommandContext& context, char* output, size_t output_len) {
+   uint16_t low = 1;
+   uint16_t high = 100;
+-  if (!parseRoll(command, &low, &high)) return writeText(output, output_len, "Usage: roll [max|low high], range 1-1000");
++  if (!parseRoll(command, &low, &high)) {
++    return writeText(output, output_len, "Invalid number. Use roll, roll X, or roll low high (max 10000)");
++  }
+ 
+   uint32_t state = context.random_seed ^ ((uint32_t)low << 16) ^ high;
+   if (state == 0) state = 1;
+   uint16_t span = (uint16_t)(high - low + 1);
+   uint16_t value = (uint16_t)(low + rollOnce(&state, span) - 1);
+-  return writeFormatted(output, output_len, "Rolled %u-%u: %u", (unsigned)low, (unsigned)high, (unsigned)value);
++  return writeFormatted(output, output_len, "Roll %u-%u: %u", (unsigned)low, (unsigned)high, (unsigned)value);
++}
++
++void appendDiceRolls(char* output, size_t output_len, size_t* pos, uint32_t* state, const DiceTerm& term, uint16_t* total) {
++  if (term.count == 1) {
++    uint16_t roll = rollOnce(state, term.sides);
++    *total = (uint16_t)(*total + roll);
++    appendFormatted(output, output_len, pos, "d%u: %u", (unsigned)term.sides, (unsigned)roll);
++    return;
++  }
++
++  appendFormatted(output, output_len, pos, "%ud%u: [", (unsigned)term.count, (unsigned)term.sides);
++  for (uint8_t i = 0; i < term.count; i++) {
++    uint16_t roll = rollOnce(state, term.sides);
++    *total = (uint16_t)(*total + roll);
++    if (i != 0) appendText(output, output_len, pos, ", ");
++    appendFormatted(output, output_len, pos, "%u", (unsigned)roll);
++  }
++  appendText(output, output_len, pos, "]");
+ }
+ 
+ BotCommandResult executeDice(const BotCommand& command, const BotCommandContext& context, char* output, size_t output_len) {
+-  uint16_t count = 1;
+-  uint16_t sides = 6;
+-  if (!parseDice(command, &count, &sides)) {
+-    return writeText(output, output_len, "Usage: dice [dN|NdN], max 10 dice, sides 2-1000");
++  ParsedDice parsed;
++  if (!parseDice(command, &parsed)) {
++    return writeText(output, output_len, "Invalid dice type. Use dice, dice d20, dice 2d6, or dice decade");
+   }
+ 
+-  uint32_t state = context.random_seed ^ ((uint32_t)count << 16) ^ sides;
++  uint32_t state = context.random_seed ^ 0x9E3779B9UL;
+   if (state == 0) state = 1;
+ 
+-  if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+-  int written = count == 1 ? snprintf(output, output_len, "Dice d%u: ", (unsigned)sides)
+-                           : snprintf(output, output_len, "Dice %ud%u: ", (unsigned)count, (unsigned)sides);
+-  if (written < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++  if (parsed.decade) {
++    uint16_t value = (uint16_t)(rollOnce(&state, 10) * 10);
++    return writeFormatted(output, output_len, "Dice decade: %u", (unsigned)value);
++  }
+ 
+-  size_t pos = (size_t)written;
++  if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
++  output[0] = 0;
++  size_t pos = 0;
+   uint16_t total = 0;
+-  for (uint16_t i = 0; i < count; i++) {
+-    uint16_t roll = rollOnce(&state, sides);
+-    total += roll;
+-    if (pos < output_len) {
+-      int n = snprintf(&output[pos], output_len - pos, i == 0 ? "%u" : "+%u", (unsigned)roll);
+-      if (n < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+-      pos += (size_t)n;
+-    }
++  appendText(output, output_len, &pos, "Dice ");
++
++  if (parsed.term_count == 1 && parsed.terms[0].count == 1) {
++    uint16_t roll = rollOnce(&state, parsed.terms[0].sides);
++    return writeFormatted(output, output_len, "Dice d%u: %u", (unsigned)parsed.terms[0].sides, (unsigned)roll);
+   }
+-  if (count > 1 && pos < output_len) {
+-    int n = snprintf(&output[pos], output_len - pos, "=%u", (unsigned)total);
+-    if (n < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+-    pos += (size_t)n;
++
++  if (parsed.term_count == 1) {
++    appendDiceRolls(output, output_len, &pos, &state, parsed.terms[0], &total);
++    appendFormatted(output, output_len, &pos, " = %u", (unsigned)total);
++    return resultForAppend(output, output_len, pos);
+   }
+ 
+-  size_t actual = boundedStrLen(output, output_len);
+-  return makeResult(pos >= output_len ? BOT_COMMAND_RESULT_TRUNCATED : BOT_COMMAND_RESULT_OK, actual);
++  for (uint8_t i = 0; i < parsed.term_count; i++) {
++    if (i != 0) appendText(output, output_len, &pos, " + ");
++    appendDiceRolls(output, output_len, &pos, &state, parsed.terms[i], &total);
++  }
++  appendFormatted(output, output_len, &pos, " | Total: %u", (unsigned)total);
++  return resultForAppend(output, output_len, pos);
++}
++
++void formatSecondsHms(uint32_t timestamp, char* output, size_t output_len) {
++  if (!output || output_len == 0) return;
++  if (timestamp == 0) {
++    snprintf(output, output_len, "Unknown");
++    return;
++  }
++  uint32_t seconds = timestamp % 86400UL;
++  snprintf(output, output_len, "%02lu:%02lu:%02lu", (unsigned long)(seconds / 3600UL),
++           (unsigned long)((seconds / 60UL) % 60UL), (unsigned long)(seconds % 60UL));
++}
++
++BotCommandResult executeTest(const BotCommand& command, const BotCommandContext& context, char* output, size_t output_len) {
++  const char* name = context.node_name[0] ? context.node_name : "local";
++  char received_at[9];
++  formatSecondsHms(context.uptime_seconds, received_at, sizeof(received_at));
++  if (command.args_len == 0) {
++    return writeFormatted(output, output_len, "ack @[%s] | local | Received at: %s", name, received_at);
++  }
++  return writeFormatted(output, output_len, "ack @[%s] %s | local | Received at: %s", name, command.args,
++                        received_at);
+ }
+ 
+ }
+@@ -303,7 +540,7 @@ BotCommandResult executeCommand(const BotCommand& command, const BotCommandConte
+     case BOT_COMMAND_PING:
+       return writeText(output, output_len, "Pong!");
+     case BOT_COMMAND_TEST:
+-      return writeText(output, output_len, "Bot test OK");
++      return executeTest(command, context, output, output_len);
+     case BOT_COMMAND_HELLO:
+       return writeFormatted(output, output_len, "Hello from %s", context.node_name[0] ? context.node_name : "MeshCore bot");
+     case BOT_COMMAND_ABOUT:
+@@ -337,16 +574,15 @@ BotCommandResult executeCommand(const BotCommand& command, const BotCommandConte
+     case BOT_COMMAND_MAGIC8:
+       return executeMagic8(context, output, output_len);
+     case BOT_COMMAND_PATH:
+-      return executePath(context, output, output_len);
++      return executePath(command, context, output, output_len);
+     case BOT_COMMAND_TRACE:
+-      return command.args_len == 0 ? writeText(output, output_len, "Trace route unavailable")
+-                                   : writeText(output, output_len, "Usage: trace [hex-path]");
++      return executeTraceLike(command, context, "Trace", "trace", output, output_len);
+     case BOT_COMMAND_TRACER:
+-      return executeTracer(command, context, output, output_len);
++      return executeTraceLike(command, context, "Tracer", "tracer", output, output_len);
+     case BOT_COMMAND_PREFIX:
+-      return writeText(output, output_len, "Prefix lookup unavailable");
++      return writeText(output, output_len, "Prefix lookup requires local contacts");
+     case BOT_COMMAND_UNSUPPORTED:
+-      return writeFormatted(output, output_len, "%s is unavailable in firmware", command.name);
++      return writeText(output, output_len, "Unknown command. Try help");
+     case BOT_COMMAND_UNKNOWN:
+       return writeText(output, output_len, "Unknown command. Try help");
+     default:
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index 4d48c13f..f93cae69 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -174,6 +174,7 @@ struct BotMessage {
+   uint8_t sender_key_prefix_len;
+   bool text_truncated;
+   uint32_t sender_timestamp;
++  uint32_t received_at_timestamp;
+   uint8_t path_len;
+   uint8_t path_hash_size;
+   uint8_t path_hash_count;
+@@ -238,6 +239,7 @@ struct BotCommandContext {
+   uint8_t path_hash_size;
+   uint8_t path_hash_count;
+   int8_t path_snr_quarters;
++  char response_target[BOT_MAX_SENDER_NAME_LEN + 1];
+   const uint8_t* path;
+ };
+ 
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index 1eed310a..de6dd92f 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -3,8 +3,13 @@
+ #include "BotCommandRegistry.h"
+ 
+ #include <ctype.h>
++#include <stdio.h>
+ #include <string.h>
+ 
++#ifndef BOT_LOCAL_TIME_OFFSET_SECONDS
++#define BOT_LOCAL_TIME_OFFSET_SECONDS -21600
++#endif
++
+ namespace {
+ 
+ uint64_t fnv1aUpdate(uint64_t hash, uint8_t value) {
+@@ -67,6 +72,18 @@ size_t boundedStrLen(const char* value, size_t max_len) {
+   return len;
+ }
+ 
++void formatTimestampHms(uint32_t timestamp, char* output, size_t output_len) {
++  if (!output || output_len == 0) return;
++  if (timestamp == 0) {
++    snprintf(output, output_len, "Unknown");
++    return;
++  }
++  int64_t adjusted = (int64_t)timestamp + (int64_t)BOT_LOCAL_TIME_OFFSET_SECONDS;
++  uint32_t seconds = (uint32_t)((adjusted % 86400LL + 86400LL) % 86400LL);
++  snprintf(output, output_len, "%02lu:%02lu:%02lu", (unsigned long)(seconds / 3600UL),
++           (unsigned long)((seconds / 60UL) % 60UL), (unsigned long)(seconds % 60UL));
++}
++
+ }
+ 
+ namespace FirmwareBot {
+@@ -114,6 +131,10 @@ BotCommandId commandIdForName(const char* name, size_t len) {
+   return command ? command->id : BOT_COMMAND_UNKNOWN;
+ }
+ 
++static BotCommandId cooldownKeyFor(BotCommandId command_id) {
++  return command_id == BOT_COMMAND_TRACER ? BOT_COMMAND_TRACE : command_id;
++}
++
+ size_t maxResponseLenForChannel(BotChannelKind channel_kind) {
+   return channel_kind == BOT_CHANNEL_DM ? BOT_MAX_RESPONSE_LEN : BOT_MAX_GROUP_RESPONSE_LEN;
+ }
+@@ -121,8 +142,9 @@ size_t maxResponseLenForChannel(BotChannelKind channel_kind) {
+ bool isCommandOnCooldown(const BotCommandCooldown* cooldowns, size_t cooldown_count, BotCommandId command_id,
+                          uint32_t now_millis) {
+   if (!cooldowns || command_id == BOT_COMMAND_NONE) return false;
++  BotCommandId cooldown_key = cooldownKeyFor(command_id);
+   for (size_t i = 0; i < cooldown_count; i++) {
+-    if (cooldowns[i].command_id == command_id && (int32_t)(cooldowns[i].expires_at_millis - now_millis) > 0) return true;
++    if (cooldowns[i].command_id == cooldown_key && (int32_t)(cooldowns[i].expires_at_millis - now_millis) > 0) return true;
+   }
+   return false;
+ }
+@@ -130,10 +152,11 @@ bool isCommandOnCooldown(const BotCommandCooldown* cooldowns, size_t cooldown_co
+ void recordCommandCooldown(BotCommandCooldown* cooldowns, size_t cooldown_count, BotCommandId command_id,
+                            uint32_t now_millis, uint32_t cooldown_millis) {
+   if (!cooldowns || cooldown_count == 0 || command_id == BOT_COMMAND_NONE || cooldown_millis == 0) return;
++  BotCommandId cooldown_key = cooldownKeyFor(command_id);
+ 
+   size_t slot = cooldown_count;
+   for (size_t i = 0; i < cooldown_count; i++) {
+-    if (cooldowns[i].command_id == command_id) {
++    if (cooldowns[i].command_id == cooldown_key) {
+       slot = i;
+       break;
+     }
+@@ -144,7 +167,7 @@ void recordCommandCooldown(BotCommandCooldown* cooldowns, size_t cooldown_count,
+   }
+   if (slot == cooldown_count) slot = 0;
+ 
+-  cooldowns[slot].command_id = command_id;
++  cooldowns[slot].command_id = cooldown_key;
+   cooldowns[slot].expires_at_millis = now_millis + cooldown_millis;
+ }
+ 
+@@ -276,6 +299,60 @@ BotWriteResult writeResponseForChannel(BotChannelKind channel_kind, bool allow_p
+   return result;
+ }
+ 
++BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& command, char* output, size_t output_len,
++                                size_t* written) {
++  if (written) *written = 0;
++  if (!output || output_len == 0) return BOT_WRITE_NO_SPACE;
++
++  const char* sender = message.sender_name[0] ? message.sender_name : "unknown";
++  const char* connection = message.channel_kind == BOT_CHANNEL_DM ? "direct" : "channel";
++  int n = command.args_len > 0 ? snprintf(output, output_len, "ack @[%s] %s | %s", sender, command.args, connection)
++                               : snprintf(output, output_len, "ack @[%s] | %s", sender, connection);
++  if (n < 0) {
++    output[0] = 0;
++    return BOT_WRITE_NO_SPACE;
++  }
++  size_t pos = (size_t)n;
++  bool truncated = pos >= output_len;
++  if (truncated) pos = output_len - 1;
++
++  if (message.path_hash_count > 0 && message.path_hash_size > 0) {
++    char path_info[36];
++    int value = message.packet_snr_quarters;
++    const char* sign = value < 0 ? "-" : "";
++    if (value < 0) value = -value;
++    int path_n = snprintf(path_info, sizeof(path_info), " path %uh x %uB snr %s%d.%02d",
++                          (unsigned)message.path_hash_count, (unsigned)message.path_hash_size, sign, value / 4,
++                          (value % 4) * 25);
++    if (path_n > 0) {
++      size_t path_len = (size_t)path_n;
++      size_t available = pos + 1 < output_len ? output_len - 1 - pos : 0;
++      size_t copy_len = path_len < available ? path_len : available;
++      if (copy_len > 0) memcpy(&output[pos], path_info, copy_len);
++      pos += path_len;
++      if (path_len > available) truncated = true;
++      output[pos < output_len ? pos : output_len - 1] = 0;
++    }
++  }
++
++  char received_at[9];
++  formatTimestampHms(message.received_at_timestamp, received_at, sizeof(received_at));
++  char received[32];
++  int received_n = snprintf(received, sizeof(received), " | Received at: %s", received_at);
++  if (received_n < 0) return BOT_WRITE_NO_SPACE;
++  size_t received_len = (size_t)received_n;
++  size_t available = pos + 1 < output_len ? output_len - 1 - pos : 0;
++  size_t copy_len = received_len < available ? received_len : available;
++  if (copy_len > 0) memcpy(&output[pos], received, copy_len);
++  pos += received_len;
++  if (received_len > available) truncated = true;
++  output[pos < output_len ? pos : output_len - 1] = 0;
++
++  size_t actual = boundedStrLen(output, output_len);
++  if (written) *written = actual;
++  return truncated ? BOT_WRITE_TRUNCATED : BOT_WRITE_OK;
++}
++
+ BotWriteResult writeBotAdvertName(const char* node_name, char* output, size_t output_len, size_t* written) {
+   if (written) *written = 0;
+   if (!output || output_len == 0) return BOT_WRITE_NO_SPACE;
+diff --git a/examples/companion_radio/FirmwareBot.h b/examples/companion_radio/FirmwareBot.h
+index 38d4416d..9eff340b 100644
+--- a/examples/companion_radio/FirmwareBot.h
++++ b/examples/companion_radio/FirmwareBot.h
+@@ -14,6 +14,8 @@ bool splitChannelText(const char* text, size_t text_len, char* sender, size_t se
+ BotWriteResult writeResponse(char* output, size_t output_len, const char* text, size_t text_len, size_t* written);
+ BotWriteResult writeResponseForChannel(BotChannelKind channel_kind, bool allow_prefixless, const char* text,
+                                        size_t text_len, char* output, size_t output_len, size_t* written);
++BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& command, char* output, size_t output_len,
++                                size_t* written);
+ BotWriteResult writeBotAdvertName(const char* node_name, char* output, size_t output_len, size_t* written);
+ bool isBotAdvertName(const char* name, size_t name_len);
+ BotFingerprint fingerprintFor(const BotMessage& message);
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 2ee5139b..7b87f14f 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -223,7 +223,7 @@ static uint8_t botTraceHashSize(uint8_t flags) {
+ 
+ static bool botTracePathShapeValid(uint8_t path_len, uint8_t flags) {
+   uint8_t hash_size = botTraceHashSize(flags);
+-  return path_len > 0 && path_len <= BOT_MAX_PATH_BYTES && path_len + 9 <= MAX_PACKET_PAYLOAD &&
++  return path_len <= BOT_MAX_PATH_BYTES && path_len + 9 <= MAX_PACKET_PAYLOAD &&
+          (path_len % hash_size) == 0 && (path_len / hash_size) <= MAX_PATH_SIZE;
+ }
+ 
+@@ -236,17 +236,42 @@ static void botCopyReversedPath(uint8_t *dest, const uint8_t *src, uint8_t hop_c
+ static bool botParseTraceHexPath(const BotCommand &command, uint8_t flags, uint8_t path[BOT_MAX_PATH_BYTES],
+                                  uint8_t *path_len) {
+   if (!path || !path_len || command.args_len == 0) return false;
+-  if ((command.args_len & 1) != 0 || command.args_len / 2 > BOT_MAX_PATH_BYTES) return false;
+ 
+-  uint8_t parsed_len = (uint8_t)(command.args_len / 2);
+-  if (!botTracePathShapeValid(parsed_len, flags)) return false;
+-
+-  for (uint8_t i = 0; i < parsed_len; i++) {
+-    int high = botHexValue(command.args[i * 2]);
+-    int low = botHexValue(command.args[i * 2 + 1]);
+-    if (high < 0 || low < 0) return false;
+-    path[i] = (uint8_t)((high << 4) | low);
++  uint8_t hash_size = botTraceHashSize(flags);
++  bool comma = false;
++  for (size_t i = 0; i < command.args_len; i++) {
++    if (command.args[i] == ',') comma = true;
++  }
++
++  uint8_t parsed_len = 0;
++  if (comma) {
++    size_t pos = 0;
++    while (pos < command.args_len) {
++      if (pos + (hash_size * 2) > command.args_len) return false;
++      for (uint8_t i = 0; i < hash_size; i++) {
++        int high = botHexValue(command.args[pos + i * 2]);
++        int low = botHexValue(command.args[pos + i * 2 + 1]);
++        if (high < 0 || low < 0 || parsed_len >= BOT_MAX_PATH_BYTES) return false;
++        path[parsed_len++] = (uint8_t)((high << 4) | low);
++      }
++      pos += hash_size * 2;
++      if (pos == command.args_len) break;
++      if (command.args[pos] != ',') return false;
++      pos++;
++      if (pos == command.args_len) return false;
++    }
++  } else {
++    if ((command.args_len & 1) != 0 || command.args_len / 2 > BOT_MAX_PATH_BYTES) return false;
++    parsed_len = (uint8_t)(command.args_len / 2);
++    for (uint8_t i = 0; i < parsed_len; i++) {
++      int high = botHexValue(command.args[i * 2]);
++      int low = botHexValue(command.args[i * 2 + 1]);
++      if (high < 0 || low < 0) return false;
++      path[i] = (uint8_t)((high << 4) | low);
++    }
+   }
++
++  if (!botTracePathShapeValid(parsed_len, flags)) return false;
+   *path_len = parsed_len;
+   return true;
+ }
+@@ -284,7 +309,7 @@ static BotCommandResult botWriteFormatted(char *output, size_t output_len, const
+ static bool botParsePubKeyPrefixHex(const BotCommand &command, uint8_t prefix[PUB_KEY_SIZE], uint8_t *prefix_len) {
+   if (!prefix || !prefix_len || command.args_len == 0 || (command.args_len & 1) != 0) return false;
+   size_t byte_len = command.args_len / 2;
+-  if (byte_len < BOT_MIN_AUTH_SENDER_KEY_PREFIX_LEN || byte_len > PUB_KEY_SIZE) return false;
++  if (byte_len < 1 || byte_len > PUB_KEY_SIZE) return false;
+   for (size_t i = 0; i < byte_len; i++) {
+     int high = botHexValue(command.args[i * 2]);
+     int low = botHexValue(command.args[i * 2 + 1]);
+@@ -341,14 +366,32 @@ static void botAppendHex(char *output, size_t output_len, size_t *pos, const uin
+   if (output_len > 0) output[*pos < output_len ? *pos : output_len - 1] = 0;
+ }
+ 
+-static size_t botFormatTraceSent(char *output, size_t output_len) {
++static void botAppendLiteral(char *output, size_t output_len, size_t *pos, const char *text) {
++  if (!output || output_len == 0 || !pos || !text) return;
++  for (size_t i = 0; text[i] != 0; i++) {
++    if (*pos + 1 < output_len) output[*pos] = text[i];
++    (*pos)++;
++  }
++  output[*pos < output_len ? *pos : output_len - 1] = 0;
++}
++
++static void botAppendPathHops(char *output, size_t output_len, size_t *pos, const uint8_t *path, uint8_t hash_size,
++                              uint8_t hash_count) {
++  for (uint8_t hop = 0; hop < hash_count; hop++) {
++    if (hop != 0) botAppendLiteral(output, output_len, pos, " -> ");
++    botAppendHex(output, output_len, pos, &path[(size_t)hop * hash_size], hash_size);
++  }
++}
++
++static size_t botFormatTraceSent(char *output, size_t output_len, uint8_t hop_count) {
+   if (!output || output_len == 0) return 0;
+-  const char *text = "Trace sent";
+-  size_t len = botBoundedStrLen(text, BOT_MAX_RESPONSE_LEN + 1);
+-  if (len + 1 > output_len) len = output_len - 1;
+-  memcpy(output, text, len);
+-  output[len] = 0;
+-  return len;
++  int written = hop_count == 0 ? snprintf(output, output_len, "Trace sent on direct zero-hop route")
++                               : snprintf(output, output_len, "Trace sent on %u-hop route", (unsigned)hop_count);
++  if (written < 0) {
++    output[0] = 0;
++    return 0;
++  }
++  return botBoundedStrLen(output, output_len);
+ }
+ 
+ static size_t botFormatTraceResult(char *output, size_t output_len, uint32_t tag, uint8_t flags,
+@@ -358,14 +401,22 @@ static size_t botFormatTraceResult(char *output, size_t output_len, uint32_t tag
+   uint8_t hop_count = path_len / hash_size;
+   char snr[8];
+   botFormatQuarters(snr_quarters, snr, sizeof(snr));
+-  int written = snprintf(output, output_len, "Trace %08lx %uh x %uB snr %s: ", (unsigned long)tag,
+-                         (unsigned)hop_count, (unsigned)hash_size, snr);
++  if (hop_count == 0) {
++    int direct_written = snprintf(output, output_len, "Trace %08lx: direct zero-hop, SNR %s", (unsigned long)tag, snr);
++    if (direct_written < 0) {
++      output[0] = 0;
++      return 0;
++    }
++    return botBoundedStrLen(output, output_len);
++  }
++  int written = snprintf(output, output_len, "Trace %08lx: %u hop%s, SNR %s | ", (unsigned long)tag,
++                         (unsigned)hop_count, hop_count == 1 ? "" : "s", snr);
+   if (written < 0) {
+     output[0] = 0;
+     return 0;
+   }
+   size_t pos = (size_t)written;
+-  botAppendHex(output, output_len, &pos, path_hashes, path_len);
++  botAppendPathHops(output, output_len, &pos, path_hashes, hash_size, hop_count);
+   return botBoundedStrLen(output, output_len);
+ }
+ #endif
+@@ -1032,6 +1083,19 @@ void MyMesh::observeBotDirectMessage(const ContactInfo &from, uint32_t sender_ti
+   if (sender_prefix && prefix_len > 0) memcpy(message.sender_key_prefix, sender_prefix, prefix_len);
+   message.sender_key_prefix_len = prefix_len;
+   message.sender_timestamp = sender_timestamp;
++  message.received_at_timestamp = getRTCClock()->getCurrentTime();
++  message.packet_snr_quarters = (int8_t)0;
++  if (from.out_path_len != OUT_PATH_UNKNOWN && mesh::Packet::isValidPathLen(from.out_path_len)) {
++    message.path_len = from.out_path_len;
++    message.path_hash_size = (from.out_path_len >> 6) + 1;
++    message.path_hash_count = from.out_path_len & 63;
++    message.path = from.out_path;
++  } else {
++    message.path_len = 0;
++    message.path_hash_size = botConfiguredTraceHashSize(_prefs.path_hash_mode);
++    message.path_hash_count = 0;
++    message.path = NULL;
++  }
+   message.text_truncated = FirmwareBot::normalizeText(text, botBoundedStrLen(text, BOT_MAX_TEXT_LEN + 1), message.text,
+                                                        sizeof(message.text), &message.text_len) == BOT_WRITE_TRUNCATED;
+   recordBotObservation(message, &from, 0xFF);
+@@ -1048,6 +1112,7 @@ void MyMesh::observeBotChannelMessage(uint8_t channel_idx, const char *channel_n
+     message.channel_name[channel_len] = 0;
+   }
+   message.sender_timestamp = sender_timestamp;
++  message.received_at_timestamp = getRTCClock()->getCurrentTime();
+   if (packet && packet->isRouteFlood() && packet->path_len <= 0xFF && mesh::Packet::isValidPathLen((uint8_t)packet->path_len)) {
+     message.path_len = (uint8_t)packet->path_len;
+     message.path_hash_size = packet->getPathHashSize();
+@@ -1178,7 +1243,7 @@ BotCommandResult MyMesh::executeBotPrefixCommand(const BotCommand &command, char
+   uint8_t prefix[PUB_KEY_SIZE];
+   uint8_t prefix_len = 0;
+   if (!botParsePubKeyPrefixHex(command, prefix, &prefix_len)) {
+-    return botWriteText(output, output_len, "Usage: prefix <8+ even hex>");
++    return botWriteText(output, output_len, "Usage: prefix <even hex>");
+   }
+ 
+   ContactInfo match;
+@@ -1217,10 +1282,17 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+   bool have_path = false;
+   if (command.args_len > 0) {
+     have_path = botParseTraceHexPath(command, flags, path, &path_len);
+-  } else if (message.path && message.path_hash_count > 0) {
++  } else if (message.path_hash_size == hash_size) {
+     uint8_t raw_len = (uint8_t)(message.path_hash_count * hash_size);
+     if (botTracePathShapeValid(raw_len, flags)) {
+-      botCopyReversedPath(path, message.path, message.path_hash_count, hash_size);
++      if (raw_len > 0) {
++        if (!message.path) return false;
++        if (message.channel_kind == BOT_CHANNEL_DM) {
++          memcpy(path, message.path, raw_len);
++        } else {
++          botCopyReversedPath(path, message.path, message.path_hash_count, hash_size);
++        }
++      }
+       path_len = raw_len;
+       have_path = true;
+     }
+@@ -1230,7 +1302,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+ 
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
+   char response[BOT_MAX_RESPONSE_LEN + 1];
+-  size_t response_len = botFormatTraceSent(response, sizeof(response));
++  size_t response_len = botFormatTraceSent(response, sizeof(response), (uint8_t)(path_len / hash_size));
+   char final_response[BOT_MAX_RESPONSE_LEN + 1];
+   size_t final_response_len = 0;
+   if (!botFormatResponseForChannel(message, response, response_len, final_response, sizeof(final_response),
+@@ -1247,7 +1319,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+   uint32_t jitter_seed = request_fingerprint.value ? (uint32_t)request_fingerprint.value : 1;
+   uint8_t queue_depth = (uint8_t)_mgr->getOutboundTotal();
+   BotCoordinatorScheduleResult schedule = ResponseCoordinator::schedule(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS,
+-                                                                        message, BOT_COMMAND_TRACE, request_fingerprint,
++                                                                        message, command.id, request_fingerprint,
+                                                                         response_fingerprint, now, jitter_seed,
+                                                                         bot_identity_seed, queue_depth, bot_prefs.normal_delay_ms,
+                                                                         bot_prefs.normal_jitter_ms, &fingerprint,
+@@ -1264,7 +1336,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+ 
+   bot_stats.eligible_messages++;
+   bot_stats.pending_responses++;
+-  FirmwareBot::recordCommandCooldown(bot_command_cooldowns, BOT_COMMAND_COOLDOWN_SLOTS, BOT_COMMAND_TRACE, now,
++  FirmwareBot::recordCommandCooldown(bot_command_cooldowns, BOT_COMMAND_COOLDOWN_SLOTS, command.id, now,
+                                      BOT_TRACE_COOLDOWN_MILLIS);
+   if (!enqueueBotTrace(message, direct_recipient, channel_idx, path, path_len, flags, fingerprint, response_fingerprint, tag,
+                        auth_code)) {
+@@ -1278,7 +1350,7 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+                              const uint8_t *path, uint8_t path_len, uint8_t flags,
+                              BotFingerprint request_fingerprint, BotFingerprint response_fingerprint, uint32_t tag,
+                              uint32_t auth_code) {
+-  if (!path || !botTracePathShapeValid(path_len, flags)) return false;
++  if ((path_len > 0 && !path) || !botTracePathShapeValid(path_len, flags)) return false;
+ 
+   size_t slot = BOT_PENDING_TRACE_SLOTS;
+   for (size_t i = 0; i < BOT_PENDING_TRACE_SLOTS; i++) {
+@@ -1308,7 +1380,7 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+   pending->auth_code = auth_code;
+   pending->flags = flags;
+   pending->path_len = path_len;
+-  memcpy(pending->path, path, path_len);
++  if (path_len > 0) memcpy(pending->path, path, path_len);
+   pending->active = true;
+   return true;
+ }
+@@ -1372,7 +1444,7 @@ bool MyMesh::sendPendingBotTrace(PendingBotTrace &pending, uint32_t now_millis)
+   pending.expires_at_millis = now_millis + BOT_TRACE_TIMEOUT_MILLIS;
+ 
+   char response[BOT_MAX_RESPONSE_LEN + 1];
+-  size_t response_len = botFormatTraceSent(response, sizeof(response));
++  size_t response_len = botFormatTraceSent(response, sizeof(response), pending.path_len / botTraceHashSize(pending.flags));
+   char final_response[BOT_MAX_RESPONSE_LEN + 1];
+   size_t final_response_len = 0;
+   if (!botFormatResponseForChannelKind(pending.channel_kind, response, response_len, final_response, sizeof(final_response),
+@@ -1387,7 +1459,9 @@ void MyMesh::expirePendingBotTraces(uint32_t now_millis) {
+     PendingBotTrace *pending = &pending_bot_traces[i];
+     if (!pending->active || !pending->sent || (int32_t)(now_millis - pending->expires_at_millis) < 0) continue;
+ 
+-    const char *response = "Trace timed out";
++    char response[BOT_MAX_RESPONSE_LEN + 1];
++    uint8_t hop_count = pending->path_len / botTraceHashSize(pending->flags);
++    snprintf(response, sizeof(response), "Trace timed out: no reply on %u-hop route", (unsigned)hop_count);
+     char final_response[BOT_MAX_RESPONSE_LEN + 1];
+     size_t final_response_len = 0;
+     if (botFormatResponseForChannelKind(pending->channel_kind, response, botBoundedStrLen(response, BOT_MAX_RESPONSE_LEN + 1),
+@@ -1491,19 +1565,43 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+ 
+   char response[BOT_MAX_RESPONSE_LEN + 1];
+   BotCommandResult result;
+-  if (command.id == BOT_COMMAND_TRACE && handleBotTraceCommand(message, direct_recipient, channel_idx, command)) return;
++  bool result_ready = false;
++  if (command.id == BOT_COMMAND_TRACE || command.id == BOT_COMMAND_TRACER) {
++    if (handleBotTraceCommand(message, direct_recipient, channel_idx, command)) {
++      return;
++    }
++    if (command.args_len > 0) {
++      result = botWriteFormatted(response, sizeof(response), "Usage: %s [path]",
++                                 command.id == BOT_COMMAND_TRACER ? "tracer" : "trace");
++      result_ready = true;
++    }
++  }
+ 
+   BotCommandContext context;
+   buildBotCommandContext(context, command.id);
+-  if (command.id == BOT_COMMAND_PATH || command.id == BOT_COMMAND_TRACER) {
++  if (command.id == BOT_COMMAND_PATH || command.id == BOT_COMMAND_TRACE || command.id == BOT_COMMAND_TRACER) {
+     context.path_len = message.path_len;
+-    context.path_hash_size = message.path_hash_size;
++    context.path_hash_size = command.args_len > 0 ? botConfiguredTraceHashSize(_prefs.path_hash_mode) : message.path_hash_size;
+     context.path_hash_count = message.path_hash_count;
+     context.path_snr_quarters = message.packet_snr_quarters;
++    if (message.channel_kind != BOT_CHANNEL_DM && message.sender_name[0]) {
++      StrHelper::strzcpy(context.response_target, message.sender_name, sizeof(context.response_target));
++    }
+     context.path = message.path;
+   }
+-  result = command.id == BOT_COMMAND_PREFIX ? executeBotPrefixCommand(command, response, sizeof(response))
+-                                             : BotCommands::executeCommand(command, context, response, sizeof(response));
++  if (!result_ready) {
++    if (command.id == BOT_COMMAND_TEST) {
++      size_t written = 0;
++      BotWriteResult write_result = FirmwareBot::writeAckResponse(message, command, response, sizeof(response), &written);
++      result.code = write_result == BOT_WRITE_NO_SPACE ? BOT_COMMAND_RESULT_NO_SPACE
++                                                       : (write_result == BOT_WRITE_TRUNCATED ? BOT_COMMAND_RESULT_TRUNCATED
++                                                                                              : BOT_COMMAND_RESULT_OK);
++      result.text_len = written;
++    } else {
++      result = command.id == BOT_COMMAND_PREFIX ? executeBotPrefixCommand(command, response, sizeof(response))
++                                                 : BotCommands::executeCommand(command, context, response, sizeof(response));
++    }
++  }
+   if (result.code == BOT_COMMAND_RESULT_NOT_HANDLED || result.code == BOT_COMMAND_RESULT_NO_SPACE || result.text_len == 0) {
+     bot_stats.parse_errors++;
+     return;
+diff --git a/platformio.ini b/platformio.ini
+index dfed7dbd..e3e4b30f 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -57,6 +57,7 @@ build_src_filter =
+ [cmesh_bot_production]
+ build_flags =
+   -D CMESH_BOT_ENABLED=1
++  -D BOT_LOCAL_TIME_OFFSET_SECONDS=-21600
+   -UENABLE_PRIVATE_KEY_IMPORT
+   -UENABLE_PRIVATE_KEY_EXPORT
+   -D ENABLE_PRIVATE_KEY_IMPORT=0
