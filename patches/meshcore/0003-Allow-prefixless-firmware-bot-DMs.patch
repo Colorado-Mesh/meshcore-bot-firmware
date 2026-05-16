@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Fri, 15 May 2026 20:09:58 -0600
+Subject: [PATCH 3/3] Allow prefixless firmware bot DMs
+
+---
+ examples/companion_radio/BotPolicy.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/examples/companion_radio/BotPolicy.cpp b/examples/companion_radio/BotPolicy.cpp
+index 33de45f8..7d0e6029 100644
+--- a/examples/companion_radio/BotPolicy.cpp
++++ b/examples/companion_radio/BotPolicy.cpp
+@@ -75,7 +75,7 @@ bool isEmergency(BotChannelKind kind) {
+ }
+ 
+ bool isPrefixlessCommandAllowed(BotChannelKind kind) {
+-  return kind == BOT_CHANNEL_BOT || kind == BOT_CHANNEL_TESTING;
++  return kind == BOT_CHANNEL_DM || kind == BOT_CHANNEL_BOT || kind == BOT_CHANNEL_TESTING;
+ }
+ 
+ }

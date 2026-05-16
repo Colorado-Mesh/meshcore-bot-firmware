@@ -57,6 +57,7 @@ static void test_channel_policy() {
   assert(BotPolicy::classifyChannel(NULL, 0, true) == BOT_CHANNEL_DM);
   assert(BotPolicy::decide(BOT_CHANNEL_DM) == BOT_POLICY_ALLOW_NORMAL);
   assert(BotPolicy::isNormalAllowed(BOT_CHANNEL_DM));
+  assert(BotPolicy::isPrefixlessCommandAllowed(BOT_CHANNEL_DM));
   assert(BotPolicy::classifyChannel("Public", 6, false) == BOT_CHANNEL_PUBLIC);
   assert(BotPolicy::classifyChannel("public", 6, false) == BOT_CHANNEL_OTHER);
   assert(BotPolicy::classifyChannel("#Public", 7, false) == BOT_CHANNEL_OTHER);
@@ -81,7 +82,6 @@ static void test_channel_policy() {
   assert(BotPolicy::classifyChannel("#botnet", 7, false) == BOT_CHANNEL_OTHER);
   assert(BotPolicy::decide(BOT_CHANNEL_OTHER) == BOT_POLICY_IGNORE);
   assert(!BotPolicy::isPrefixlessCommandAllowed(BOT_CHANNEL_OTHER));
-  assert(!BotPolicy::isPrefixlessCommandAllowed(BOT_CHANNEL_DM));
 }
 
 static void test_bot_prefs_defaults() {
@@ -327,7 +327,8 @@ static void test_parse_command() {
   assert(command.id == BOT_COMMAND_PING);
   assert(parse_channel_command(BOT_CHANNEL_TESTING, "ping", &command));
   assert(command.id == BOT_COMMAND_PING);
-  assert(!parse_channel_command(BOT_CHANNEL_DM, "ping", &command));
+  assert(parse_channel_command(BOT_CHANNEL_DM, "ping", &command));
+  assert(command.id == BOT_COMMAND_PING);
   assert(!parse_channel_command(BOT_CHANNEL_PUBLIC, "ping", &command));
   assert(!parse_channel_command(BOT_CHANNEL_OTHER, "ping", &command));
   assert(!parse_channel_command(BOT_CHANNEL_EMERGENCY, "ping", &command));
@@ -336,7 +337,9 @@ static void test_parse_command() {
   assert(FirmwareBot::parseCommand("status please", 13, &command, true));
   assert(command.id == BOT_COMMAND_STATUS);
   assert(strcmp(command.args, "please") == 0);
-  assert(!parse_channel_command(BOT_CHANNEL_DM, "status please", &command));
+  assert(parse_channel_command(BOT_CHANNEL_DM, "status please", &command));
+  assert(command.id == BOT_COMMAND_STATUS);
+  assert(strcmp(command.args, "please") == 0);
   assert(!parse_channel_command(BOT_CHANNEL_PUBLIC, "status please", &command));
   assert(!parse_channel_command(BOT_CHANNEL_BOT, "random prose", &command));
   assert(!FirmwareBot::parseCommand("random prose", 12, &command, true));
