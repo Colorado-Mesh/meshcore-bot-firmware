@@ -40,8 +40,11 @@ jobs:
       - name: Install PlatformIO
         run: python3 -m pip install --upgrade platformio
 
+      - name: Apply MeshCore patches
+        run: bash scripts/apply-patches.sh
+
       - name: Run host tests and safety checks
-        run: bash scripts/verify.sh --no-build
+        run: MESHCORE_SKIP_APPLY_PATCHES=1 bash scripts/verify.sh --no-build
 
       - name: Build representative firmware
         run: |
