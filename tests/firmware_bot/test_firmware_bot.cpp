@@ -413,6 +413,69 @@ static void test_response_write() {
   assert(out[0] == 0);
 }
 
+static void test_channel_text_and_response_guards() {
+  char sender[BOT_MAX_SENDER_NAME_LEN + 1];
+  char out[BOT_MAX_TEXT_LEN + 1];
+  size_t written = 0;
+  char input[BOT_MAX_TEXT_LEN + 8];
+  strcpy(input, "alice: ");
+  memset(&input[7], 'x', BOT_MAX_TEXT_LEN);
+  input[7 + BOT_MAX_TEXT_LEN] = 0;
+  assert(FirmwareBot::normalizeChannelText(input, sender, sizeof(sender), out, sizeof(out), &written) == BOT_WRITE_TRUNCATED);
+  assert(strcmp(sender, "alice") == 0);
+  assert(written == BOT_MAX_TEXT_LEN);
+
+  BotCommand command;
+  char response[BOT_MAX_RESPONSE_LEN + 1];
+  assert(FirmwareBot::writeResponseForChannel(BOT_CHANNEL_BOT, true, "trace sent", 10, response, sizeof(response),
+                                              &written) == BOT_WRITE_OK);
+  assert(strcmp(response, "# trace sent") == 0);
+  assert(!FirmwareBot::parseCommand(response, written, &command, true));
+  char normalized[BOT_MAX_TEXT_LEN + 1];
+  assert(FirmwareBot::normalizeChannelText(response, sender, sizeof(sender), normalized, sizeof(normalized), &written) ==
+         BOT_WRITE_OK);
+  assert(strcmp(normalized, "# trace sent") == 0);
+  assert(!FirmwareBot::parseCommand(normalized, written, &command, true));
+  assert(FirmwareBot::writeResponseForChannel(BOT_CHANNEL_BOT, true, "# trace sent", 12, response, sizeof(response),
+                                              &written) == BOT_WRITE_OK);
+  assert(strcmp(response, "# trace sent") == 0);
+  assert(FirmwareBot::normalizeChannelText(response, sender, sizeof(sender), normalized, sizeof(normalized), &written) ==
+         BOT_WRITE_OK);
+  assert(!FirmwareBot::parseCommand(normalized, written, &command, true));
+  assert(FirmwareBot::writeResponseForChannel(BOT_CHANNEL_DM, false, "trace sent", 10, response, sizeof(response),
+                                              &written) == BOT_WRITE_OK);
+  assert(strcmp(response, "trace sent") == 0);
+
+  strcpy(sender, "stale");
+  assert(FirmwareBot::normalizeChannelText("plain text", sender, sizeof(sender), normalized, sizeof(normalized),
+                                           &written) == BOT_WRITE_OK);
+  assert(sender[0] == 0);
+  assert(strcmp(normalized, "plain text") == 0);
+
+  char long_response[BOT_MAX_RESPONSE_LEN + 1];
+  memset(long_response, 'p', sizeof(long_response));
+  long_response[BOT_MAX_RESPONSE_LEN] = 0;
+  assert(FirmwareBot::writeResponseForChannel(BOT_CHANNEL_BOT, true, long_response, BOT_MAX_RESPONSE_LEN, response,
+                                              sizeof(response), &written) == BOT_WRITE_TRUNCATED);
+  assert(written == BOT_MAX_GROUP_RESPONSE_LEN);
+}
+
+static void test_bot_advert_marker() {
+  char out[32];
+  size_t written = 0;
+  assert(FirmwareBot::writeBotAdvertName("node", out, sizeof(out), &written) == BOT_WRITE_OK);
+  assert(strcmp(out, "node" BOT_ADVERT_MARKER) == 0);
+  assert(written == strlen(out));
+  assert(FirmwareBot::isBotAdvertName(out, strlen(out)));
+  assert(!FirmwareBot::isBotAdvertName("node", 4));
+  assert(!FirmwareBot::isBotAdvertName("node [bot]", 10));
+
+  char small[12];
+  assert(FirmwareBot::writeBotAdvertName("very-long-node-name", small, sizeof(small), &written) == BOT_WRITE_TRUNCATED);
+  assert(FirmwareBot::isBotAdvertName(small, strlen(small)));
+  assert(written == sizeof(small) - 1);
+}
+
 static BotMessage make_message(const char* channel, const char* text) {
   BotMessage message;
   memset(&message, 0, sizeof(message));
@@ -486,7 +549,8 @@ static void test_command_outputs() {
 
   result = run_command("!help", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strstr(out, "Commands: help cmd ping") == out);
+  assert(strstr(out, "Cmds: help cmd ping") == out);
+  assert(result.text_len <= BOT_MAX_GROUP_RESPONSE_LEN);
   assert(strstr(out, "roll") != NULL);
   assert(strstr(out, "dice") != NULL);
   assert(strstr(out, "trace") != NULL);
@@ -864,6 +928,14 @@ static void test_fingerprint() {
   assert(fa.value != FirmwareBot::fingerprintFor(b).value);
 }
 
+static BotFingerprint final_response_fingerprint_for(const BotMessage& message, const char* text) {
+  char response[BOT_MAX_RESPONSE_LEN + 1];
+  size_t written = 0;
+  assert(FirmwareBot::writeResponseForChannel(message.channel_kind, BotPolicy::isPrefixlessCommandAllowed(message.channel_kind),
+                                              text, strlen(text), response, sizeof(response), &written) != BOT_WRITE_NO_SPACE);
+  return FirmwareBot::responseFingerprintFor(message, response, written);
+}
+
 static void test_response_fingerprint() {
   BotMessage a = make_message("#bot", "!ping");
   BotMessage b = make_message("bot", "!ping");
@@ -1011,8 +1083,112 @@ static void test_response_coordinator_suppression_uses_response_fingerprint() {
   assert(ready.request_fingerprint.value == first_request.value);
   assert(ready.response_fingerprint.value == response.value);
   ready = ResponseCoordinator::poll(pending, 2, due);
+  assert(ready.result == BOT_COORDINATOR_READY_SUPPRESSED);
+  assert(ready.request_fingerprint.value == second_request.value);
+  assert(ready.response_fingerprint.value == response.value);
+  assert(ResponseCoordinator::poll(pending, 2, due).result == BOT_COORDINATOR_READY_NONE);
+}
+
+static void test_trace_final_response_fingerprints_use_final_text() {
+  BotMessage message = make_message("#bot", "trace");
+  BotFingerprint sent = final_response_fingerprint_for(message, "Trace sent");
+  BotFingerprint result_a = final_response_fingerprint_for(message, "Trace 12345678 2h x 2B snr 1.25: 11112222");
+  BotFingerprint result_b = final_response_fingerprint_for(message, "Trace 12345678 2h x 2B snr 1.25: aaaabbbb");
+  BotFingerprint timeout = final_response_fingerprint_for(message, "Trace timed out");
+  assert(sent.value != result_a.value);
+  assert(result_a.value != result_b.value);
+  assert(timeout.value != sent.value);
+  assert(timeout.value != result_a.value);
+}
+
+static void test_response_coordinator_distinct_path_outputs() {
+  BotCoordinatorPending pending[2];
+  ResponseCoordinator::clear(pending, 2);
+  BotMessage first = make_message("#bot", "path");
+  BotMessage second = first;
+  second.sender_timestamp++;
+  uint8_t path_a[] = { 0x12, 0x34, 0x56, 0x78 };
+  uint8_t path_b[] = { 0xab, 0xcd, 0xef, 0x01 };
+  first.path = path_a;
+  first.path_hash_size = 2;
+  first.path_hash_count = 2;
+  second.path = path_b;
+  second.path_hash_size = 2;
+  second.path_hash_count = 2;
+  BotFingerprint first_request = FirmwareBot::fingerprintFor(first);
+  BotFingerprint second_request = FirmwareBot::fingerprintFor(second);
+  BotFingerprint first_response = FirmwareBot::responseFingerprintFor(first, "Path 2h x 2B snr 0.00: 12345678", 34);
+  BotFingerprint second_response = FirmwareBot::responseFingerprintFor(second, "Path 2h x 2B snr 0.00: abcdef01", 34);
+  BotFingerprint scheduled;
+  uint32_t first_due = 0;
+  uint32_t second_due = 0;
+  uint32_t identity_seed = 0x01020304UL;
+
+  assert(first_request.value != second_request.value);
+  assert(first_response.value != second_response.value);
+  assert(ResponseCoordinator::schedule(pending, 2, first, BOT_COMMAND_PATH, first_request, first_response, 1000, 0,
+                                       identity_seed, 0, &scheduled, &first_due) == BOT_COORDINATOR_SCHEDULED);
+  assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_PATH, second_request, second_response, 1000, 0,
+                                       identity_seed, 0, &scheduled, &second_due) == BOT_COORDINATOR_SCHEDULED);
+  assert(ResponseCoordinator::suppress(pending, 2, first_response));
+  BotCoordinatorReady ready = ResponseCoordinator::poll(pending, 2, 1000);
+  assert(ready.result == BOT_COORDINATOR_READY_SUPPRESSED);
+  assert(ready.response_fingerprint.value == first_response.value);
+  ready = ResponseCoordinator::poll(pending, 2, first_due > second_due ? first_due : second_due);
   assert(ready.result == BOT_COORDINATOR_READY_SEND);
   assert(ready.request_fingerprint.value == second_request.value);
+  assert(ready.response_fingerprint.value == second_response.value);
+}
+
+static void test_response_coordinator_group_observed_response_suppresses() {
+  BotCoordinatorPending pending[1];
+  ResponseCoordinator::clear(pending, 1);
+  BotMessage request_message = make_message("#bot", "ping");
+  BotMessage observed_response = make_message("#bot", "Pong!");
+  BotFingerprint request = FirmwareBot::fingerprintFor(request_message);
+  BotFingerprint response = final_response_fingerprint_for(request_message, "Pong!");
+  BotFingerprint observed = FirmwareBot::responseFingerprintFor(observed_response, observed_response.text,
+                                                               observed_response.text_len);
+  BotFingerprint scheduled;
+  uint32_t due = 0;
+
+  assert(response.value == observed.value);
+  assert(ResponseCoordinator::schedule(pending, 1, request_message, BOT_COMMAND_PING, request, response, 1000, 0,
+                                       0x01020304UL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
+  assert(ResponseCoordinator::suppress(pending, 1, observed));
+  BotCoordinatorReady ready = ResponseCoordinator::poll(pending, 1, 1000);
+  assert(ready.result == BOT_COORDINATOR_READY_SUPPRESSED);
+  assert(ready.response_fingerprint.value == response.value);
+}
+
+static void test_response_coordinator_group_guarded_path_output_suppresses() {
+  BotCoordinatorPending pending[1];
+  ResponseCoordinator::clear(pending, 1);
+  BotMessage request_message = make_message("#bot", "path");
+  BotFingerprint request = FirmwareBot::fingerprintFor(request_message);
+  const char* path_text = "Path 2h x 2B snr 0.00: 12345678";
+  char final_response[BOT_MAX_RESPONSE_LEN + 1];
+  size_t final_response_len = 0;
+  assert(FirmwareBot::writeResponseForChannel(request_message.channel_kind,
+                                              BotPolicy::isPrefixlessCommandAllowed(request_message.channel_kind),
+                                              path_text, strlen(path_text), final_response, sizeof(final_response),
+                                              &final_response_len) == BOT_WRITE_OK);
+  assert(strcmp(final_response, "# Path 2h x 2B snr 0.00: 12345678") == 0);
+  BotCommand command;
+  assert(!FirmwareBot::parseCommand(final_response, final_response_len, &command, true));
+  BotFingerprint response = FirmwareBot::responseFingerprintFor(request_message, final_response, final_response_len);
+  BotMessage observed_response = make_message("#bot", final_response);
+  BotFingerprint observed = FirmwareBot::responseFingerprintFor(observed_response, observed_response.text,
+                                                               observed_response.text_len);
+  BotFingerprint scheduled;
+  uint32_t due = 0;
+
+  assert(response.value == observed.value);
+  assert(ResponseCoordinator::schedule(pending, 1, request_message, BOT_COMMAND_PATH, request, response, 1000, 0,
+                                       0x01020304UL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
+  assert(ResponseCoordinator::suppress(pending, 1, observed));
+  BotCoordinatorReady ready = ResponseCoordinator::poll(pending, 1, 1000);
+  assert(ready.result == BOT_COORDINATOR_READY_SUPPRESSED);
   assert(ready.response_fingerprint.value == response.value);
 }
 
@@ -1160,6 +1336,8 @@ int main() {
   test_normalize_truncation();
   test_parse_command();
   test_response_write();
+  test_channel_text_and_response_guards();
+  test_bot_advert_marker();
   test_command_outputs();
   test_path_command();
   test_dice_command();
@@ -1178,6 +1356,10 @@ int main() {
   test_response_coordinator_schedule_poll();
   test_response_coordinator_distinct_requests_same_response();
   test_response_coordinator_suppression_uses_response_fingerprint();
+  test_trace_final_response_fingerprints_use_final_text();
+  test_response_coordinator_distinct_path_outputs();
+  test_response_coordinator_group_observed_response_suppresses();
+  test_response_coordinator_group_guarded_path_output_suppresses();
   test_response_coordinator_suppress_expire_full();
   test_response_coordinator_cancel_by_request();
   test_response_coordinator_delay_biases();

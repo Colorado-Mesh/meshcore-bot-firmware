@@ -1,0 +1,458 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Fri, 15 May 2026 19:58:42 -0600
+Subject: [PATCH 2/2] Harden firmware bot response coordination
+
+---
+ examples/companion_radio/BotCommands.cpp      |   2 +-
+ examples/companion_radio/BotTypes.h           |   4 +
+ examples/companion_radio/FirmwareBot.cpp      |  66 +++++++++
+ examples/companion_radio/FirmwareBot.h        |   6 +
+ examples/companion_radio/MyMesh.cpp           | 129 ++++++++++++++----
+ examples/companion_radio/MyMesh.h             |   7 +
+ .../companion_radio/ResponseCoordinator.cpp   |   5 +-
+ 7 files changed, 193 insertions(+), 26 deletions(-)
+
+diff --git a/examples/companion_radio/BotCommands.cpp b/examples/companion_radio/BotCommands.cpp
+index a7d3637f..add7feed 100644
+--- a/examples/companion_radio/BotCommands.cpp
++++ b/examples/companion_radio/BotCommands.cpp
+@@ -180,7 +180,7 @@ BotCommandResult executeHelp(const BotCommand& command, char* output, size_t out
+     if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+     output[0] = 0;
+     size_t pos = 0;
+-    appendText(output, output_len, &pos, "Commands: ");
++    appendText(output, output_len, &pos, "Cmds: ");
+     bool first = true;
+     for (size_t i = 0; i < BotCommandRegistry::commandCount(); i++) {
+       const BotCommandMetadata* metadata = BotCommandRegistry::commandAt(i);
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index 5c7430a9..4d48c13f 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -14,11 +14,15 @@
+ #define BOT_MAX_PATH_BYTES 64
+ #define BOT_GROUP_RESPONSE_PREFIX_RESERVE (BOT_MAX_SENDER_NAME_LEN + 2)
+ #define BOT_MAX_GROUP_RESPONSE_LEN (BOT_MAX_TEXT_LEN - BOT_GROUP_RESPONSE_PREFIX_RESERVE)
++#define BOT_GROUP_RESPONSE_GUARD_PREFIX "# "
++#define BOT_GROUP_RESPONSE_GUARD_PREFIX_LEN 2
+ #define BOT_COMMAND_COOLDOWN_MILLIS 5000UL
+ #define BOT_TRACE_COOLDOWN_MILLIS 60000UL
+ #define BOT_TRACE_TIMEOUT_MILLIS 30000UL
+ #define BOT_PENDING_TRACE_SLOTS 2
+ #define BOT_EMERGENCY_PREFIX "EMERGENCY MESSAGE FROM "
++#define BOT_ADVERT_MARKER " [MCBOT]"
++#define BOT_ADVERT_MARKER_LEN 8
+ #define BOT_EMERGENCY_MAX_PARTS 3
+ #define BOT_PENDING_EMERGENCY_SLOTS BOT_EMERGENCY_MAX_PARTS
+ #define BOT_COORDINATOR_PENDING_SLOTS 8
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index d1b240bb..1eed310a 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -218,6 +218,19 @@ bool splitChannelText(const char* text, size_t text_len, char* sender, size_t se
+   return false;
+ }
+ 
++BotWriteResult normalizeChannelText(const char* text, char* sender, size_t sender_len, char* output, size_t output_len,
++                                    size_t* written) {
++  if (sender && sender_len > 0) sender[0] = 0;
++  const char* body = text;
++  size_t raw_len = boundedStrLen(text, BOT_MAX_TEXT_LEN + BOT_MAX_SENDER_NAME_LEN + 3);
++  size_t body_len = raw_len;
++  splitChannelText(text, body_len, sender, sender_len, &body, &body_len);
++  bool truncated = raw_len > BOT_MAX_TEXT_LEN || body_len > BOT_MAX_TEXT_LEN;
++  if (body_len > BOT_MAX_TEXT_LEN) body_len = BOT_MAX_TEXT_LEN;
++  BotWriteResult result = normalizeText(body, body_len, output, output_len, written);
++  return truncated ? BOT_WRITE_TRUNCATED : result;
++}
++
+ BotWriteResult writeResponse(char* output, size_t output_len, const char* text, size_t text_len, size_t* written) {
+   if (written) *written = 0;
+   if (!output || output_len == 0) return BOT_WRITE_NO_SPACE;
+@@ -236,6 +249,59 @@ BotWriteResult writeResponse(char* output, size_t output_len, const char* text,
+   return copy_len < text_len ? BOT_WRITE_TRUNCATED : BOT_WRITE_OK;
+ }
+ 
++BotWriteResult writeResponseForChannel(BotChannelKind channel_kind, bool allow_prefixless, const char* text,
++                                       size_t text_len, char* output, size_t output_len, size_t* written) {
++  BotCommand command;
++  bool needs_guard = channel_kind != BOT_CHANNEL_DM && allow_prefixless &&
++                     parseCommand(text, text_len, &command, true);
++  size_t max_len = maxResponseLenForChannel(channel_kind);
++  if (max_len + 1 < output_len) output_len = max_len + 1;
++  if (!needs_guard) return writeResponse(output, output_len, text, text_len, written);
++
++  if (!output || output_len == 0) {
++    if (written) *written = 0;
++    return BOT_WRITE_NO_SPACE;
++  }
++  if (output_len <= BOT_GROUP_RESPONSE_GUARD_PREFIX_LEN) {
++    output[0] = 0;
++    if (written) *written = 0;
++    return BOT_WRITE_NO_SPACE;
++  }
++  memcpy(output, BOT_GROUP_RESPONSE_GUARD_PREFIX, BOT_GROUP_RESPONSE_GUARD_PREFIX_LEN);
++  size_t body_written = 0;
++  BotWriteResult result = writeResponse(&output[BOT_GROUP_RESPONSE_GUARD_PREFIX_LEN],
++                                        output_len - BOT_GROUP_RESPONSE_GUARD_PREFIX_LEN, text, text_len,
++                                        &body_written);
++  if (written) *written = BOT_GROUP_RESPONSE_GUARD_PREFIX_LEN + body_written;
++  return result;
++}
++
++BotWriteResult writeBotAdvertName(const char* node_name, char* output, size_t output_len, size_t* written) {
++  if (written) *written = 0;
++  if (!output || output_len == 0) return BOT_WRITE_NO_SPACE;
++  if (output_len <= BOT_ADVERT_MARKER_LEN) {
++    output[0] = 0;
++    return BOT_WRITE_NO_SPACE;
++  }
++
++  size_t base_len = boundedStrLen(node_name, output_len - 1);
++  bool truncated = false;
++  if (base_len + BOT_ADVERT_MARKER_LEN + 1 > output_len) {
++    base_len = output_len - BOT_ADVERT_MARKER_LEN - 1;
++    truncated = true;
++  }
++  if (base_len > 0) memcpy(output, node_name, base_len);
++  memcpy(&output[base_len], BOT_ADVERT_MARKER, BOT_ADVERT_MARKER_LEN);
++  output[base_len + BOT_ADVERT_MARKER_LEN] = 0;
++  if (written) *written = base_len + BOT_ADVERT_MARKER_LEN;
++  return truncated ? BOT_WRITE_TRUNCATED : BOT_WRITE_OK;
++}
++
++bool isBotAdvertName(const char* name, size_t name_len) {
++  if (!name || name_len < BOT_ADVERT_MARKER_LEN) return false;
++  return memcmp(&name[name_len - BOT_ADVERT_MARKER_LEN], BOT_ADVERT_MARKER, BOT_ADVERT_MARKER_LEN) == 0;
++}
++
+ BotFingerprint fingerprintFor(const BotMessage& message) {
+   uint64_t hash = 1469598103934665603ULL;
+   hash = fnv1aUpdateChannel(hash, message);
+diff --git a/examples/companion_radio/FirmwareBot.h b/examples/companion_radio/FirmwareBot.h
+index e248adc1..38d4416d 100644
+--- a/examples/companion_radio/FirmwareBot.h
++++ b/examples/companion_radio/FirmwareBot.h
+@@ -5,11 +5,17 @@
+ namespace FirmwareBot {
+ 
+ BotWriteResult normalizeText(const char* input, size_t input_len, char* output, size_t output_len, size_t* written);
++BotWriteResult normalizeChannelText(const char* text, char* sender, size_t sender_len, char* output, size_t output_len,
++                                    size_t* written);
+ bool parseCommand(const char* text, size_t text_len, BotCommand* command);
+ bool parseCommand(const char* text, size_t text_len, BotCommand* command, bool allow_prefixless);
+ bool splitChannelText(const char* text, size_t text_len, char* sender, size_t sender_len, const char** body,
+                       size_t* body_len);
+ BotWriteResult writeResponse(char* output, size_t output_len, const char* text, size_t text_len, size_t* written);
++BotWriteResult writeResponseForChannel(BotChannelKind channel_kind, bool allow_prefixless, const char* text,
++                                       size_t text_len, char* output, size_t output_len, size_t* written);
++BotWriteResult writeBotAdvertName(const char* node_name, char* output, size_t output_len, size_t* written);
++bool isBotAdvertName(const char* name, size_t name_len);
+ BotFingerprint fingerprintFor(const BotMessage& message);
+ BotFingerprint responseFingerprintFor(const BotMessage& message, const char* response_text, size_t response_text_len);
+ BotCommandId commandIdForName(const char* name, size_t len);
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 44fcd1ca..2ee5139b 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -139,6 +139,18 @@ static void botCopyString(char *dest, size_t dest_len, const char *src) {
+   dest[len] = 0;
+ }
+ 
++static bool botFormatResponseForChannelKind(BotChannelKind channel_kind, const char *text, size_t text_len, char *output,
++                                            size_t output_len, size_t *written) {
++  BotWriteResult result = FirmwareBot::writeResponseForChannel(
++      channel_kind, BotPolicy::isPrefixlessCommandAllowed(channel_kind), text, text_len, output, output_len, written);
++  return result != BOT_WRITE_NO_SPACE && written && *written > 0;
++}
++
++static bool botFormatResponseForChannel(const BotMessage &message, const char *text, size_t text_len, char *output,
++                                        size_t output_len, size_t *written) {
++  return botFormatResponseForChannelKind(message.channel_kind, text, text_len, output, output_len, written);
++}
++
+ static bool botParseU32(const char *text, uint32_t *value, const char **end_out) {
+   if (!text || !value || !isdigit((unsigned char)text[0])) return false;
+   uint32_t parsed = 0;
+@@ -598,6 +610,10 @@ void MyMesh::onContactsFull() {
+ }
+ 
+ void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
++#if CMESH_BOT_ENABLED
++  autoLearnKnownBotAdvert(contact);
++#endif
++
+   if (_serial->isConnected()) {
+     if (is_new) {
+       writeContactRespFrame(PUSH_CODE_NEW_ADVERT, contact);
+@@ -1040,11 +1056,9 @@ void MyMesh::observeBotChannelMessage(uint8_t channel_idx, const char *channel_n
+     message.path = packet->path;
+   }
+ 
+-  const char *body = text;
+-  size_t body_len = botBoundedStrLen(text, BOT_MAX_TEXT_LEN);
+-  FirmwareBot::splitChannelText(text, body_len, message.sender_name, sizeof(message.sender_name), &body, &body_len);
+-  message.text_truncated = FirmwareBot::normalizeText(body, body_len, message.text, sizeof(message.text),
+-                                                       &message.text_len) == BOT_WRITE_TRUNCATED;
++  message.text_truncated = FirmwareBot::normalizeChannelText(text, message.sender_name, sizeof(message.sender_name),
++                                                              message.text, sizeof(message.text),
++                                                              &message.text_len) == BOT_WRITE_TRUNCATED;
+   recordBotObservation(message, NULL, channel_idx);
+ }
+ 
+@@ -1100,6 +1114,21 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
+   }
+ }
+ 
++bool MyMesh::autoLearnKnownBotAdvert(const ContactInfo &contact) {
++  if (!bot_prefs.enabled || contact.type != ADV_TYPE_CHAT ||
++      !FirmwareBot::isBotAdvertName(contact.name, botBoundedStrLen(contact.name, sizeof(contact.name)))) {
++    return false;
++  }
++
++  uint8_t key[BOT_SENDER_KEY_PREFIX_LEN];
++  memcpy(key, contact.id.pub_key, sizeof(key));
++  if (BotPrefsCodec::findKnownBot(bot_prefs, key)) return false;
++  if (!BotPrefsCodec::addKnownBot(bot_prefs, key, BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL, "autobot")) return false;
++  KnownBotRegistry::add(known_bot_entries, BOT_KNOWN_BOT_SLOTS, key, BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL, "autobot");
++  saveBotPrefs();
++  return true;
++}
++
+ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
+                                 const char *text, size_t text_len, BotFingerprint request_fingerprint,
+                                 BotFingerprint response_fingerprint) {
+@@ -1124,11 +1153,9 @@ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *di
+   pending->channel_idx = channel_idx;
+   pending->request_fingerprint = request_fingerprint;
+   pending->response_fingerprint = response_fingerprint;
+-  pending->text_len = text_len;
+-  size_t max_text_len = FirmwareBot::maxResponseLenForChannel(message.channel_kind);
+-  if (pending->text_len > max_text_len) pending->text_len = max_text_len;
+-  if (pending->text_len > 0) memcpy(pending->text, text, pending->text_len);
+-  pending->text[pending->text_len] = 0;
++  if (!botFormatResponseForChannel(message, text, text_len, pending->text, sizeof(pending->text), &pending->text_len)) {
++    return false;
++  }
+   pending->active = true;
+   return true;
+ }
+@@ -1204,7 +1231,14 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
+   char response[BOT_MAX_RESPONSE_LEN + 1];
+   size_t response_len = botFormatTraceSent(response, sizeof(response));
+-  BotFingerprint response_fingerprint = FirmwareBot::responseFingerprintFor(message, response, response_len);
++  char final_response[BOT_MAX_RESPONSE_LEN + 1];
++  size_t final_response_len = 0;
++  if (!botFormatResponseForChannel(message, response, response_len, final_response, sizeof(final_response),
++                                   &final_response_len)) {
++    bot_stats.send_failures++;
++    return true;
++  }
++  BotFingerprint response_fingerprint = FirmwareBot::responseFingerprintFor(message, final_response, final_response_len);
+   BotFingerprint fingerprint;
+   uint32_t due_at_millis = 0;
+   uint32_t now = _ms->getMillis();
+@@ -1264,6 +1298,10 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+     memcpy(pending->recipient_pub_key, direct_recipient->id.pub_key, sizeof(pending->recipient_pub_key));
+   }
+   pending->channel_idx = channel_idx;
++  pending->channel_kind = message.channel_kind;
++  StrHelper::strzcpy(pending->channel_name, message.channel_name, sizeof(pending->channel_name));
++  memcpy(pending->sender_key_prefix, message.sender_key_prefix, sizeof(pending->sender_key_prefix));
++  pending->sender_key_prefix_len = message.sender_key_prefix_len;
+   pending->request_fingerprint = request_fingerprint;
+   pending->response_fingerprint = response_fingerprint;
+   pending->tag = tag;
+@@ -1275,6 +1313,16 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+   return true;
+ }
+ 
++BotFingerprint MyMesh::traceResponseFingerprintFor(const PendingBotTrace &pending, const char *text, size_t text_len) {
++  BotMessage message;
++  memset(&message, 0, sizeof(message));
++  message.channel_kind = pending.channel_kind;
++  StrHelper::strzcpy(message.channel_name, pending.channel_name, sizeof(message.channel_name));
++  memcpy(message.sender_key_prefix, pending.sender_key_prefix, sizeof(message.sender_key_prefix));
++  message.sender_key_prefix_len = pending.sender_key_prefix_len;
++  return FirmwareBot::responseFingerprintFor(message, text, text_len);
++}
++
+ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text, size_t text_len,
+                               BotFingerprint response_fingerprint, uint32_t now_millis) {
+   bool success = false;
+@@ -1325,7 +1373,13 @@ bool MyMesh::sendPendingBotTrace(PendingBotTrace &pending, uint32_t now_millis)
+ 
+   char response[BOT_MAX_RESPONSE_LEN + 1];
+   size_t response_len = botFormatTraceSent(response, sizeof(response));
+-  return sendBotTraceText(pending, response, response_len, pending.response_fingerprint, now_millis);
++  char final_response[BOT_MAX_RESPONSE_LEN + 1];
++  size_t final_response_len = 0;
++  if (!botFormatResponseForChannelKind(pending.channel_kind, response, response_len, final_response, sizeof(final_response),
++                                       &final_response_len)) {
++    return false;
++  }
++  return sendBotTraceText(pending, final_response, final_response_len, pending.response_fingerprint, now_millis);
+ }
+ 
+ void MyMesh::expirePendingBotTraces(uint32_t now_millis) {
+@@ -1334,10 +1388,13 @@ void MyMesh::expirePendingBotTraces(uint32_t now_millis) {
+     if (!pending->active || !pending->sent || (int32_t)(now_millis - pending->expires_at_millis) < 0) continue;
+ 
+     const char *response = "Trace timed out";
+-    BotFingerprint response_fingerprint;
+-    response_fingerprint.value = pending->response_fingerprint.value ^ 0x74696d656f7574ULL;
+-    sendBotTraceText(*pending, response, botBoundedStrLen(response, BOT_MAX_RESPONSE_LEN + 1), response_fingerprint,
+-                     now_millis);
++    char final_response[BOT_MAX_RESPONSE_LEN + 1];
++    size_t final_response_len = 0;
++    if (botFormatResponseForChannelKind(pending->channel_kind, response, botBoundedStrLen(response, BOT_MAX_RESPONSE_LEN + 1),
++                                        final_response, sizeof(final_response), &final_response_len)) {
++      BotFingerprint response_fingerprint = traceResponseFingerprintFor(*pending, final_response, final_response_len);
++      sendBotTraceText(*pending, final_response, final_response_len, response_fingerprint, now_millis);
++    }
+     pending->active = false;
+   }
+ }
+@@ -1384,6 +1441,18 @@ bool MyMesh::observeKnownBotResponse(const BotMessage &message, bool authoritati
+   return false;
+ }
+ 
++bool MyMesh::observeBotGroupResponse(const BotMessage &message) {
++  if (!BotPolicy::isPrefixlessCommandAllowed(message.channel_kind)) return false;
++  BotFingerprint fingerprint = FirmwareBot::responseFingerprintFor(message, message.text, message.text_len);
++  if (ResponseCoordinator::recentlySent(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS, fingerprint, _ms->getMillis())) {
++    return true;
++  }
++  if (ResponseCoordinator::suppress(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, fingerprint)) {
++    return true;
++  }
++  return false;
++}
++
+ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx) {
+   bot_stats.observed_messages++;
+   BotPolicyDecision decision = BotPolicy::decide(message.channel_kind);
+@@ -1403,6 +1472,7 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+   }
+ 
+   if (observeKnownBotResponse(message, direct_recipient != NULL)) return;
++  if (!direct_recipient && observeBotGroupResponse(message)) return;
+   sendQueuedBotResponses();
+ 
+   BotCommand command;
+@@ -1439,8 +1509,15 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+     return;
+   }
+ 
++  char final_response[BOT_MAX_RESPONSE_LEN + 1];
++  size_t final_response_len = 0;
++  if (!botFormatResponseForChannel(message, response, result.text_len, final_response, sizeof(final_response), &final_response_len)) {
++    bot_stats.send_failures++;
++    return;
++  }
++
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
+-  BotFingerprint response_fingerprint = FirmwareBot::responseFingerprintFor(message, response, result.text_len);
++  BotFingerprint response_fingerprint = FirmwareBot::responseFingerprintFor(message, final_response, final_response_len);
+   BotFingerprint fingerprint;
+   uint32_t due_at_millis = 0;
+   uint32_t bot_identity_seed;
+@@ -1462,7 +1539,7 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+   bot_stats.pending_responses++;
+   FirmwareBot::recordCommandCooldown(bot_command_cooldowns, BOT_COMMAND_COOLDOWN_SLOTS, command.id, _ms->getMillis(),
+                                      BOT_COMMAND_COOLDOWN_MILLIS);
+-  if (!enqueueBotResponse(message, direct_recipient, channel_idx, response, result.text_len, fingerprint, response_fingerprint)) {
++  if (!enqueueBotResponse(message, direct_recipient, channel_idx, final_response, final_response_len, fingerprint, response_fingerprint)) {
+     ResponseCoordinator::cancel(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, fingerprint);
+     bot_stats.send_failures++;
+   }
+@@ -1572,10 +1649,12 @@ void MyMesh::sendQueuedEmergencyForwards() {
+ 
+ bool MyMesh::sendBotSelfAdvert(bool flood) {
+   mesh::Packet* pkt;
++  char bot_advert_name[sizeof(((ContactInfo*)0)->name)];
++  FirmwareBot::writeBotAdvertName(_prefs.node_name, bot_advert_name, sizeof(bot_advert_name), NULL);
+   if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-    pkt = createSelfAdvert(_prefs.node_name);
++    pkt = createSelfAdvert(bot_advert_name);
+   } else {
+-    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
++    pkt = createSelfAdvert(bot_advert_name, sensors.node_lat, sensors.node_lon);
+   }
+   if (!pkt) return false;
+ 
+@@ -1927,9 +2006,13 @@ void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code,
+     char response[BOT_MAX_RESPONSE_LEN + 1];
+     size_t response_len = botFormatTraceResult(response, sizeof(response), tag, flags, path_hashes, path_len,
+                                                (int8_t)(packet->getSNR() * 4));
+-    BotFingerprint response_fingerprint;
+-    response_fingerprint.value = pending->response_fingerprint.value ^ 0x726573756c74ULL;
+-    sendBotTraceText(*pending, response, response_len, response_fingerprint, now);
++    char final_response[BOT_MAX_RESPONSE_LEN + 1];
++    size_t final_response_len = 0;
++    if (botFormatResponseForChannelKind(pending->channel_kind, response, response_len, final_response,
++                                        sizeof(final_response), &final_response_len)) {
++      BotFingerprint response_fingerprint = traceResponseFingerprintFor(*pending, final_response, final_response_len);
++      sendBotTraceText(*pending, final_response, final_response_len, response_fingerprint, now);
++    }
+     pending->active = false;
+     break;
+   }
+diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
+index 8d848fef..67bdc010 100644
+--- a/examples/companion_radio/MyMesh.h
++++ b/examples/companion_radio/MyMesh.h
+@@ -214,7 +214,9 @@ private:
+                                 uint32_t sender_timestamp, const mesh::Packet *packet);
+   void recordBotObservation(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx);
+   bool observeKnownBotResponse(const BotMessage &message, bool authoritative_sender);
++  bool observeBotGroupResponse(const BotMessage &message);
+   void buildBotCommandContext(BotCommandContext &context, BotCommandId command_id);
++  bool autoLearnKnownBotAdvert(const ContactInfo &contact);
+   bool enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
+                           const char *text, size_t text_len, BotFingerprint request_fingerprint,
+                           BotFingerprint response_fingerprint);
+@@ -226,6 +228,7 @@ private:
+                        BotFingerprint response_fingerprint, uint32_t tag, uint32_t auth_code);
+   bool sendBotTraceText(const PendingBotTrace &pending, const char *text, size_t text_len,
+                         BotFingerprint response_fingerprint, uint32_t now_millis);
++  BotFingerprint traceResponseFingerprintFor(const PendingBotTrace &pending, const char *text, size_t text_len);
+   bool sendPendingBotTrace(PendingBotTrace &pending, uint32_t now_millis);
+   void expirePendingBotTraces(uint32_t now_millis);
+   bool enqueueEmergencyForward(const BotMessage &message);
+@@ -291,8 +294,12 @@ private:
+     bool active;
+     bool direct;
+     bool sent;
++    BotChannelKind channel_kind;
+     uint8_t recipient_pub_key[PUB_KEY_SIZE];
+     uint8_t channel_idx;
++    char channel_name[BOT_MAX_CHANNEL_NAME_LEN + 1];
++    uint8_t sender_key_prefix[BOT_SENDER_KEY_PREFIX_LEN];
++    uint8_t sender_key_prefix_len;
+     BotFingerprint request_fingerprint;
+     BotFingerprint response_fingerprint;
+     uint32_t tag;
+diff --git a/examples/companion_radio/ResponseCoordinator.cpp b/examples/companion_radio/ResponseCoordinator.cpp
+index 25c03f18..484372e5 100644
+--- a/examples/companion_radio/ResponseCoordinator.cpp
++++ b/examples/companion_radio/ResponseCoordinator.cpp
+@@ -120,13 +120,14 @@ BotCoordinatorScheduleResult schedule(BotCoordinatorPending pending[], size_t pe
+ 
+ bool suppress(BotCoordinatorPending pending[], size_t pending_count, BotFingerprint response_fingerprint) {
+   if (!pending || response_fingerprint.value == 0) return false;
++  bool suppressed = false;
+   for (size_t i = 0; i < pending_count; i++) {
+     if (pending[i].active && sameFingerprint(pending[i].response_fingerprint, response_fingerprint)) {
+       pending[i].suppressed = true;
+-      return true;
++      suppressed = true;
+     }
+   }
+-  return false;
++  return suppressed;
+ }
+ 
+ bool cancel(BotCoordinatorPending pending[], size_t pending_count, BotFingerprint request_fingerprint) {
