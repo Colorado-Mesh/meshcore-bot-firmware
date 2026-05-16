@@ -42,7 +42,9 @@ if [ ! -d "${MESHCORE_DIR}/.git" ] && [ ! -f "${MESHCORE_DIR}/.git" ]; then
   exit 1
 fi
 
-if ! git -C "${MESHCORE_DIR}" diff --quiet --cached || ! git -C "${MESHCORE_DIR}" diff --quiet || [ -n "$(git -C "${MESHCORE_DIR}" ls-files --others --exclude-standard)" ]; then
+if [ "${MESHCORE_SKIP_APPLY_PATCHES:-0}" = "1" ]; then
+  echo "Skipping MeshCore patch application; using current vendor/MeshCore tree."
+elif ! git -C "${MESHCORE_DIR}" diff --quiet --cached || ! git -C "${MESHCORE_DIR}" diff --quiet || [ -n "$(git -C "${MESHCORE_DIR}" ls-files --others --exclude-standard)" ]; then
   echo "MeshCore submodule is dirty; verify existing patched tree without applying patches."
 else
   "${MESHCORE_FW_ROOT}/scripts/apply-patches.sh"

@@ -1,0 +1,205 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'cmesh-bot-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label to embed (e.g. v1.2.3 or v1.2.3-rc.1). Required for manual runs.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  enumerate:
+    name: Enumerate companion targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      shards: ${{ steps.shards.outputs.shards }}
+      env_count: ${{ steps.shards.outputs.env_count }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Resolve release version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+            # cmesh-bot-vX.Y.Z[-...]  ->  vX.Y.Z[-...]
+            version="${tag#cmesh-bot-}"
+          fi
+          if [ -z "$version" ]; then
+            echo "Could not derive a version label." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release version: $version"
+
+      - name: Enumerate companion USB+BLE environments and shard
+        id: shards
+        run: |
+          envs=$(grep -rhE '^\[env:' vendor/MeshCore/variants/ \
+                 | sort -u \
+                 | grep -E '_companion_radio_(usb|ble)\]$' \
+                 | sed -e 's/\[env://' -e 's/\]//')
+          count=$(printf '%s\n' "$envs" | wc -l | tr -d ' ')
+          echo "env_count=$count" >> "$GITHUB_OUTPUT"
+          echo "Found $count companion USB+BLE environments."
+          shards=$(jq -nc '[range(0;8)]')
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build shard ${{ matrix.shard }}/8
+    needs: enumerate
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.enumerate.outputs.shards) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+          key: ${{ runner.os }}-pio-release-${{ hashFiles('vendor/MeshCore/platformio.ini', 'vendor/MeshCore/variants/**/platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-release-
+            ${{ runner.os }}-pio-
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: python3 -m pip install --upgrade platformio
+
+      - name: Apply patches
+        run: bash scripts/apply-patches.sh
+
+      - name: Select envs for this shard
+        id: select
+        run: |
+          envs=$(grep -rhE '^\[env:' vendor/MeshCore/variants/ \
+                 | sort -u \
+                 | grep -E '_companion_radio_(usb|ble)\]$' \
+                 | sed -e 's/\[env://' -e 's/\]//')
+          shard_envs=$(printf '%s\n' "$envs" \
+                       | awk -v shard=${{ matrix.shard }} -v total=8 'NR%total==shard')
+          printf 'envs<<EOF\n%s\nEOF\n' "$shard_envs" >> "$GITHUB_OUTPUT"
+          shard_count=$(printf '%s\n' "$shard_envs" | grep -c . || true)
+          echo "Shard ${{ matrix.shard }}: building $shard_count envs"
+          printf '%s\n' "$shard_envs"
+
+      - name: Build firmware
+        env:
+          FIRMWARE_VERSION: ${{ needs.enumerate.outputs.version }}
+        run: |
+          set -e
+          mkdir -p out/firmware out/logs
+          cd vendor/MeshCore
+          while IFS= read -r env; do
+            [ -z "$env" ] && continue
+            log="../../out/logs/$env.log"
+            echo "::group::Building $env"
+            if /usr/bin/env bash build.sh build-firmware "$env" 2>&1 | tee "$log"; then
+              echo "::endgroup::"
+              if compgen -G "out/$env-*" >/dev/null; then
+                cp out/"$env"-* ../../out/firmware/
+              fi
+            else
+              echo "::endgroup::"
+              echo "::error::Build failed for $env (see logs artifact)"
+              exit 1
+            fi
+          done <<< "${{ steps.select.outputs.envs }}"
+
+      - name: Upload firmware shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-shard-${{ matrix.shard }}
+          path: out/firmware
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-shard-${{ matrix.shard }}
+          path: out/logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Publish draft release
+    needs: [enumerate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download all firmware shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-shard-*
+          merge-multiple: true
+          path: release-firmware
+
+      - name: List release artifacts
+        run: |
+          count=$(find release-firmware -maxdepth 1 -type f | wc -l | tr -d ' ')
+          echo "Aggregated $count release artifacts:"
+          ls -la release-firmware/
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: Colorado Mesh Bot Firmware ${{ needs.enumerate.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          prerelease: ${{ contains(needs.enumerate.outputs.version, '-') }}
+          generate_release_notes: true
+          body: |
+            Companion-radio firmware for the Colorado Mesh.
+
+            **Built environments:** ${{ needs.enumerate.outputs.env_count }} companion USB+BLE targets across ESP32, NRF52, RP2040, and STM32 platforms.
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for changes in this version.
+
+            ### Install
+
+            Easiest: flash via [flasher.meshcore.io](https://flasher.meshcore.io) and drag in the right artifact for your board.
+
+            - ESP32 boards: `<board>-merged.bin`
+            - NRF52 boards: `<board>.uf2`
+
+            See the [README](https://github.com/${{ github.repository }}#install) for other install methods.
+          files: release-firmware/*

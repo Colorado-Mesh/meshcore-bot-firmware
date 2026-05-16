@@ -1,0 +1,61 @@
+name: Bug report
+description: Something's broken in the firmware or tooling
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The more concrete, the faster we can chase it down.
+  - type: input
+    id: firmware_version
+    attributes:
+      label: Firmware version
+      description: From `bot` (no args) CLI command, the `version` chat command, or the filename you flashed.
+      placeholder: cmesh-bot-v1.2.3-abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: board
+    attributes:
+      label: Board
+      description: Which PlatformIO env / hardware?
+      options:
+        - Heltec V3 (USB)
+        - Heltec V3 (BLE)
+        - RAK 4631 (USB)
+        - RAK 4631 (BLE)
+        - LilyGo T-Echo
+        - LilyGo T-Deck
+        - Xiao S3 WIO
+        - Other (specify below)
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: What happened?
+      description: What did you observe? What did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: The shortest sequence of actions that reproduces the bug.
+      placeholder: |
+        1. Flash cmesh-bot-vX.Y.Z to Heltec V3
+        2. From another node 3 hops away, send `ping` on #bot
+        3. Observe: no reply within 30s
+    validations:
+      required: true
+  - type: textarea
+    id: bot_stats
+    attributes:
+      label: bot stats output (if available)
+      description: Output of `bot` and `bot stats` from the USB CLI rescue console, before and after the trigger.
+      render: shell
+  - type: textarea
+    id: other
+    attributes:
+      label: Anything else?
+      description: Logs, screenshots, hop diagrams, peer node names, etc.

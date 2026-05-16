@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest a new bot command, board, or capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: What problem are you trying to solve?
+      description: Start with the use case, not the proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What command, behavior, or board support would address the problem?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Other commands, workflow changes, off-device tools, etc.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Anything specific about scope or implementation?
+      description: e.g. should this be guarded by a CLI toggle? Does it need new bot prefs? Cross-bot coordination?

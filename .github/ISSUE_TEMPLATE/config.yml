@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: MeshCore upstream
+    url: https://github.com/meshcore-dev/MeshCore/issues
+    about: Bugs that affect upstream MeshCore (not specific to the Colorado bot patches) should go upstream.
+  - name: Colorado Mesh community
+    url: https://github.com/Colorado-Mesh
+    about: General questions about Colorado Mesh — coverage, joining, hardware recommendations.
