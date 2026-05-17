@@ -1,0 +1,256 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 19:33:04 -0600
+Subject: [PATCH 7/7] Prefix bot responses with request token for inter-bot
+ suppression
+
+Adds a 4-hex request token (low 16 bits of the request fingerprint) as a
+leading "[XXXX] " prefix on every bot response. Two bots receiving the
+same channel request compute the same fingerprint -> same token, so a
+peer bot can correlate an observed response back to its own pending
+response even when the response text differs (per-bot data like hop
+count, SNR, recv time, etc.).
+
+New FirmwareBot helpers:
+- requestToken(BotFingerprint) -> uint16_t
+- formatRequestToken(uint16_t, char[5])
+- parseRequestTokenPrefix(text, len, *token, *prefix_len)
+- prependRequestToken(request_fingerprint, text, text_len, buf_len, *new_len)
+
+New ResponseCoordinator function:
+- suppressByRequestToken(pending, count, token16) suppresses entries
+  where (request_fingerprint.value & 0xFFFF) == token16
+
+Wiring:
+- MyMesh::enqueueBotResponse prepends the token to every queued response
+- MyMesh::sendBotTraceText prepends the token to async trace results
+- MyMesh::observeBotGroupResponse parses the token from incoming peer
+  responses and suppresses matching pending responses, in addition to
+  the existing response-fingerprint match (which still handles deterministic
+  commands like ping->Pong where both bots produce identical text)
+
+Fixes inter-bot duplication on #bot for ack/test/hello/status/roll/dice/
+path/trace/tracer/stats/time/lora/id/neighbors observed on the Colorado
+mesh when two bots both queued responses to the same command.
+---
+ examples/companion_radio/FirmwareBot.cpp      | 65 +++++++++++++++++++
+ examples/companion_radio/FirmwareBot.h        |  5 ++
+ examples/companion_radio/MyMesh.cpp           | 40 +++++++++---
+ .../companion_radio/ResponseCoordinator.cpp   | 15 +++++
+ .../companion_radio/ResponseCoordinator.h     |  1 +
+ 5 files changed, 118 insertions(+), 8 deletions(-)
+
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index 6aac8a1b..24c79e81 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -422,4 +422,69 @@ BotFingerprint responseFingerprintFor(const BotMessage& message, const char* res
+   return fingerprint;
+ }
+ 
++uint16_t requestToken(BotFingerprint request_fingerprint) {
++  // Take the low 16 bits of the request fingerprint. Two bots computing
++  // fingerprintFor() against the same request derive the same token, so
++  // a bot can recognise another bot's response to a request it also queued
++  // even when the response text differs (different hop count, SNR, recv time).
++  return (uint16_t)(request_fingerprint.value & 0xFFFFu);
++}
++
++void formatRequestToken(uint16_t token, char out[5]) {
++  if (!out) return;
++  static const char hex[] = "0123456789abcdef";
++  out[0] = hex[(token >> 12) & 0xF];
++  out[1] = hex[(token >> 8) & 0xF];
++  out[2] = hex[(token >> 4) & 0xF];
++  out[3] = hex[token & 0xF];
++  out[4] = 0;
++}
++
++static int hexNibble(char c) {
++  if (c >= '0' && c <= '9') return c - '0';
++  if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
++  if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
++  return -1;
++}
++
++bool parseRequestTokenPrefix(const char* text, size_t text_len, uint16_t* token, size_t* prefix_len) {
++  if (token) *token = 0;
++  if (prefix_len) *prefix_len = 0;
++  if (!text || text_len < 7) return false;            // "[XXXX] " = 7 chars minimum
++  if (text[0] != '[' || text[5] != ']' || text[6] != ' ') return false;
++  uint16_t value = 0;
++  for (int i = 0; i < 4; i++) {
++    int n = hexNibble(text[1 + i]);
++    if (n < 0) return false;
++    value = (uint16_t)((value << 4) | (uint16_t)n);
++  }
++  if (token) *token = value;
++  if (prefix_len) *prefix_len = 7;
++  return true;
++}
++
++BotWriteResult prependRequestToken(BotFingerprint request_fingerprint, char* text, size_t text_len, size_t buf_len,
++                                   size_t* new_len) {
++  if (new_len) *new_len = text_len;
++  if (!text || buf_len == 0) return BOT_WRITE_NO_SPACE;
++  if (text_len + 7 + 1 > buf_len) {
++    // No room for "[XXXX] " prefix + null terminator without dropping content.
++    return BOT_WRITE_NO_SPACE;
++  }
++  char hex[5];
++  formatRequestToken(requestToken(request_fingerprint), hex);
++  memmove(text + 7, text, text_len);
++  text[0] = '[';
++  text[1] = hex[0];
++  text[2] = hex[1];
++  text[3] = hex[2];
++  text[4] = hex[3];
++  text[5] = ']';
++  text[6] = ' ';
++  size_t total = text_len + 7;
++  if (total < buf_len) text[total] = 0;
++  if (new_len) *new_len = total;
++  return BOT_WRITE_OK;
++}
++
+ }
+diff --git a/examples/companion_radio/FirmwareBot.h b/examples/companion_radio/FirmwareBot.h
+index 9eff340b..6e5cfd9a 100644
+--- a/examples/companion_radio/FirmwareBot.h
++++ b/examples/companion_radio/FirmwareBot.h
+@@ -20,6 +20,11 @@ BotWriteResult writeBotAdvertName(const char* node_name, char* output, size_t ou
+ bool isBotAdvertName(const char* name, size_t name_len);
+ BotFingerprint fingerprintFor(const BotMessage& message);
+ BotFingerprint responseFingerprintFor(const BotMessage& message, const char* response_text, size_t response_text_len);
++uint16_t requestToken(BotFingerprint request_fingerprint);
++void formatRequestToken(uint16_t token, char out[5]);
++bool parseRequestTokenPrefix(const char* text, size_t text_len, uint16_t* token, size_t* prefix_len);
++BotWriteResult prependRequestToken(BotFingerprint request_fingerprint, char* text, size_t text_len, size_t buf_len,
++                                   size_t* new_len);
+ BotCommandId commandIdForName(const char* name, size_t len);
+ size_t maxResponseLenForChannel(BotChannelKind channel_kind);
+ bool isCommandOnCooldown(const BotCommandCooldown* cooldowns, size_t cooldown_count, BotCommandId command_id,
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 9209dd86..02339124 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -1209,6 +1209,11 @@ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *di
+   if (!botFormatResponseForChannel(message, text, text_len, pending->text, sizeof(pending->text), &pending->text_len)) {
+     return false;
+   }
++  // Prefix every bot response with the request token so peer bots can correlate
++  // their pending response to ours (their response text may differ from ours when
++  // the command includes per-bot data like hop count, SNR, recv time, etc.).
++  FirmwareBot::prependRequestToken(request_fingerprint, pending->text, pending->text_len, sizeof(pending->text),
++                                    &pending->text_len);
+   pending->active = true;
+   return true;
+ }
+@@ -1613,6 +1618,17 @@ BotFingerprint MyMesh::traceResponseFingerprintFor(const PendingBotTrace &pendin
+ 
+ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text, size_t text_len,
+                               BotFingerprint response_fingerprint, uint32_t now_millis) {
++  // Prefix with the request token so peer bots can correlate this trace result
++  // back to their own pending trace for the same request and suppress duplicates.
++  char tokened[BOT_MAX_RESPONSE_LEN + 1];
++  size_t tokened_len = text_len;
++  if (tokened_len > BOT_MAX_RESPONSE_LEN) tokened_len = BOT_MAX_RESPONSE_LEN;
++  if (tokened_len > 0) memcpy(tokened, text, tokened_len);
++  tokened[tokened_len] = 0;
++  FirmwareBot::prependRequestToken(pending.request_fingerprint, tokened, tokened_len, sizeof(tokened), &tokened_len);
++  const char *send_text = tokened;
++  size_t send_len = tokened_len;
++
+   bool success = false;
+   if (pending.direct) {
+     ContactInfo *recipient = lookupContactByPubKey(pending.recipient_pub_key, PUB_KEY_SIZE);
+@@ -1620,12 +1636,7 @@ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text,
+       uint32_t expected_ack = 0;
+       uint32_t est_timeout = 0;
+       uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
+-      char response[BOT_MAX_RESPONSE_LEN + 1];
+-      size_t copy_len = text_len;
+-      if (copy_len > BOT_MAX_RESPONSE_LEN) copy_len = BOT_MAX_RESPONSE_LEN;
+-      if (copy_len > 0) memcpy(response, text, copy_len);
+-      response[copy_len] = 0;
+-      int result = sendMessage(*recipient, timestamp, 0, response, expected_ack, est_timeout);
++      int result = sendMessage(*recipient, timestamp, 0, send_text, expected_ack, est_timeout);
+       success = result != MSG_SEND_FAILED;
+       if (success && expected_ack) {
+         expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();
+@@ -1638,7 +1649,7 @@ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text,
+     ChannelDetails channel;
+     uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
+     success = getChannel(pending.channel_idx, channel) &&
+-              sendGroupMessage(timestamp, channel.channel, _prefs.node_name, text, text_len);
++              sendGroupMessage(timestamp, channel.channel, _prefs.node_name, send_text, send_len);
+   }
+ 
+   if (success) {
+@@ -1744,6 +1755,19 @@ bool MyMesh::observeKnownBotResponse(const BotMessage &message, bool authoritati
+ 
+ bool MyMesh::observeBotGroupResponse(const BotMessage &message) {
+   if (!BotPolicy::isPrefixlessCommandAllowed(message.channel_kind)) return false;
++
++  // If the incoming channel message carries a request token from a peer bot,
++  // suppress our own pending response for that same request even when the
++  // response text differs (hop count, SNR, recv time, etc.).
++  uint16_t token = 0;
++  size_t token_prefix_len = 0;
++  bool token_suppressed = false;
++  if (FirmwareBot::parseRequestTokenPrefix(message.text, message.text_len, &token, &token_prefix_len)) {
++    if (ResponseCoordinator::suppressByRequestToken(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, token)) {
++      token_suppressed = true;
++    }
++  }
++
+   BotFingerprint fingerprint = FirmwareBot::responseFingerprintFor(message, message.text, message.text_len);
+   if (ResponseCoordinator::recentlySent(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS, fingerprint, _ms->getMillis())) {
+     return true;
+@@ -1751,7 +1775,7 @@ bool MyMesh::observeBotGroupResponse(const BotMessage &message) {
+   if (ResponseCoordinator::suppress(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, fingerprint)) {
+     return true;
+   }
+-  return false;
++  return token_suppressed;
+ }
+ 
+ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx) {
+diff --git a/examples/companion_radio/ResponseCoordinator.cpp b/examples/companion_radio/ResponseCoordinator.cpp
+index 7afdab24..3640f8b6 100644
+--- a/examples/companion_radio/ResponseCoordinator.cpp
++++ b/examples/companion_radio/ResponseCoordinator.cpp
+@@ -153,6 +153,21 @@ bool suppress(BotCoordinatorPending pending[], size_t pending_count, BotFingerpr
+   return suppressed;
+ }
+ 
++bool suppressByRequestToken(BotCoordinatorPending pending[], size_t pending_count, uint16_t request_token) {
++  if (!pending) return false;
++  bool suppressed = false;
++  for (size_t i = 0; i < pending_count; i++) {
++    if (!pending[i].active) continue;
++    if (pending[i].request_fingerprint.value == 0) continue;
++    uint16_t token = (uint16_t)(pending[i].request_fingerprint.value & 0xFFFFu);
++    if (token == request_token) {
++      pending[i].suppressed = true;
++      suppressed = true;
++    }
++  }
++  return suppressed;
++}
++
+ bool cancel(BotCoordinatorPending pending[], size_t pending_count, BotFingerprint request_fingerprint) {
+   if (!pending || request_fingerprint.value == 0) return false;
+   for (size_t i = 0; i < pending_count; i++) {
+diff --git a/examples/companion_radio/ResponseCoordinator.h b/examples/companion_radio/ResponseCoordinator.h
+index f549b887..7e053b44 100644
+--- a/examples/companion_radio/ResponseCoordinator.h
++++ b/examples/companion_radio/ResponseCoordinator.h
+@@ -32,6 +32,7 @@ BotCoordinatorScheduleResult schedule(BotCoordinatorPending pending[], size_t pe
+                                       uint8_t queue_depth, uint16_t base_delay_millis, uint16_t jitter_millis,
+                                       uint16_t hop_step_millis, BotFingerprint* fingerprint, uint32_t* due_at_millis);
+ bool suppress(BotCoordinatorPending pending[], size_t pending_count, BotFingerprint response_fingerprint);
++bool suppressByRequestToken(BotCoordinatorPending pending[], size_t pending_count, uint16_t request_token);
+ bool cancel(BotCoordinatorPending pending[], size_t pending_count, BotFingerprint request_fingerprint);
+ BotCoordinatorReady poll(BotCoordinatorPending pending[], size_t pending_count, uint32_t now_millis);
+ void recordRecent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerprint response_fingerprint,

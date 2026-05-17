@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 18:58:28 -0600
-Subject: [PATCH 6/6] Mark bot adverts, speed up initial advert, default
+Subject: [PATCH 6/7] Mark bot adverts, speed up initial advert, default
  contacts auto-overwrite
 
 Three coordination/discoverability fixes:
