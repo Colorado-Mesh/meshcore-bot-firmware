@@ -1138,6 +1138,26 @@ static void test_fingerprint() {
   assert(fa.value != FirmwareBot::fingerprintFor(b).value);
 }
 
+static void test_channel_id_fingerprint() {
+  uint8_t channel_id_a[4] = { 0x10, 0x20, 0x30, 0x40 };
+  uint8_t channel_id_b[4] = { 0x10, 0x20, 0x30, 0x41 };
+  BotMessage a = make_message("#bot", "!PING");
+  BotMessage b = make_message("#testing", "!ping");
+  BotMessage c = make_message("#ops", "!ping");
+  c.channel_kind = BOT_CHANNEL_BOT;
+  BotFingerprint fa = FirmwareBot::fingerprintFor(a, channel_id_a, sizeof(channel_id_a));
+  BotFingerprint fb = FirmwareBot::fingerprintFor(b, channel_id_a, sizeof(channel_id_a));
+  BotFingerprint fc = FirmwareBot::fingerprintFor(c, channel_id_a, sizeof(channel_id_a));
+  assert(fa.value == fb.value);
+  assert(fa.value == fc.value);
+  assert(fa.value != FirmwareBot::fingerprintFor(a, channel_id_b, sizeof(channel_id_b)).value);
+
+  BotMessage dm = a;
+  dm.channel_kind = BOT_CHANNEL_DM;
+  dm.channel_name[0] = 0;
+  assert(FirmwareBot::fingerprintFor(dm, channel_id_a, sizeof(channel_id_a)).value == FirmwareBot::fingerprintFor(dm).value);
+}
+
 static BotFingerprint final_response_fingerprint_for(const BotMessage& message, const char* text) {
   char response[BOT_MAX_RESPONSE_LEN + 1];
   size_t written = 0;
@@ -1169,6 +1189,21 @@ static void test_response_fingerprint() {
   other_dm.sender_key_prefix[0] ^= 0x55;
   assert(FirmwareBot::responseFingerprintFor(dm, "pong!", 5).value !=
          FirmwareBot::responseFingerprintFor(other_dm, "pong!", 5).value);
+}
+
+static void test_response_fingerprint_ignores_request_token() {
+  BotMessage message = make_message("#bot", "ping");
+  BotFingerprint bare = FirmwareBot::responseFingerprintFor(message, "Pong!", 5);
+  assert(bare.value == FirmwareBot::responseFingerprintFor(message, "[1a2b] Pong!", 12).value);
+  assert(bare.value == FirmwareBot::responseFingerprintFor(message, "[1A2B] Pong!", 12).value);
+  assert(bare.value != FirmwareBot::responseFingerprintFor(message, "[bad] Pong!", 11).value);
+
+  BotMessage dm = message;
+  dm.channel_kind = BOT_CHANNEL_DM;
+  dm.channel_name[0] = 0;
+  dm.sender_key_prefix_len = BOT_SENDER_KEY_PREFIX_LEN;
+  assert(FirmwareBot::responseFingerprintFor(dm, "Pong!", 5).value ==
+         FirmwareBot::responseFingerprintFor(dm, "[1a2b] Pong!", 12).value);
 }
 
 static void test_authoritative_suppression_flow() {
@@ -1665,7 +1700,9 @@ int main() {
   test_known_bot_registry();
   test_known_bot_registry_ambiguous_short_prefix();
   test_fingerprint();
+  test_channel_id_fingerprint();
   test_response_fingerprint();
+  test_response_fingerprint_ignores_request_token();
   test_authoritative_suppression_flow();
   test_response_coordinator_schedule_poll();
   test_response_coordinator_distinct_requests_same_response();

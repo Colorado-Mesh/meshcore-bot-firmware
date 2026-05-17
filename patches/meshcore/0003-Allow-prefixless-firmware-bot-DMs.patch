@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Fri, 15 May 2026 20:09:58 -0600
-Subject: [PATCH 03/13] Allow prefixless firmware bot DMs
+Subject: [PATCH 03/14] Allow prefixless firmware bot DMs
 
 ---
  examples/companion_radio/BotPolicy.cpp | 2 +-
