@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 19:33:04 -0600
-Subject: [PATCH 7/8] Prefix bot responses with request token for inter-bot
+Subject: [PATCH 7/9] Prefix bot responses with request token for inter-bot
  suppression
 
 Adds a 4-hex request token (low 16 bits of the request fingerprint) as a

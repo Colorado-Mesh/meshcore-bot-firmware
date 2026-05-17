@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 19:55:36 -0600
-Subject: [PATCH 8/8] Drop [MCBOT] advert suffix and auto-learn known-bot path
+Subject: [PATCH 8/9] Drop [MCBOT] advert suffix and auto-learn known-bot path
 
 Removes BOT_ADVERT_MARKER / writeBotAdvertName / isBotAdvertName from
 FirmwareBot, autoLearnKnownBotAdvert and getAdvertNodeName from MyMesh,

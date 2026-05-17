@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 20:05:19 -0600
+Subject: [PATCH 9/9] Widen hop-step + drop "ack " prefix from test response
+
+Two changes:
+
+1. Coordination timing: bump BOT_HOP_STEP_MILLIS_DEFAULT 1500 -> 2500,
+   BOT_HOP_BIAS_MAX_MILLIS 8000 -> 12000, BOT_RESPONSE_PENDING_TTL_MILLIS
+   45000 -> 60000. Bumps BOT_PREFS_VERSION 3 -> 4 so existing bots
+   re-derive defaults instead of carrying the old 1500 ms hop step.
+
+   Why: a far bot (4 hops from request) was firing at ~7-10 s while a
+   near bot (1 hop) fired at ~3-6 s. Across 4-5 mesh hops, the near
+   bot's response took ~5-10 s of airtime+queueing to reach the far
+   bot, frequently arriving AFTER the far bot's scheduled fire time.
+   With 2500 ms/hop, the far bot now schedules at ~12 s, giving ~5-8 s
+   of margin for the near bot's response to arrive and trigger
+   token-based suppression.
+
+2. Test command response: drop the literal "ack " prefix from
+   writeAckResponse and BotCommands::executeTest. Responses now start
+   directly with "@[sender] ..." which keeps the user mention and
+   metadata but matches user preference for less noise.
+---
+ examples/companion_radio/BotCommands.cpp | 4 ++--
+ examples/companion_radio/BotTypes.h      | 8 ++++----
+ examples/companion_radio/FirmwareBot.cpp | 2 +-
+ 3 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/examples/companion_radio/BotCommands.cpp b/examples/companion_radio/BotCommands.cpp
+index 44357a99..1aa4406d 100644
+--- a/examples/companion_radio/BotCommands.cpp
++++ b/examples/companion_radio/BotCommands.cpp
+@@ -536,9 +536,9 @@ BotCommandResult executeTest(const BotCommand& command, const BotCommandContext&
+   char received_at[9];
+   formatSecondsHms(context.uptime_seconds, received_at, sizeof(received_at));
+   if (command.args_len == 0) {
+-    return writeFormatted(output, output_len, "ack @[%s] local | recv %s", name, received_at);
++    return writeFormatted(output, output_len, "@[%s] local | recv %s", name, received_at);
+   }
+-  return writeFormatted(output, output_len, "ack @[%s] local | recv %s | %s", name, received_at, command.args);
++  return writeFormatted(output, output_len, "@[%s] local | recv %s | %s", name, received_at, command.args);
+ }
+ 
+ }
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index ad249300..5a953639 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -30,14 +30,14 @@
+ #define BOT_NEIGHBOR_RECENT_MILLIS (60UL * 60UL * 1000UL)
+ #define BOT_RESPONSE_DELAY_BASE_MILLIS 1200UL
+ #define BOT_RESPONSE_DELAY_JITTER_MILLIS 1800UL
+-#define BOT_RESPONSE_PENDING_TTL_MILLIS 45000UL
++#define BOT_RESPONSE_PENDING_TTL_MILLIS 60000UL
+ #define BOT_RESPONSE_RECENT_TTL_MILLIS 30000UL
+ #define BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL 0x01
+ #define BOT_SENDER_KEY_PREFIX_LEN 6
+ #define BOT_MIN_AUTH_SENDER_KEY_PREFIX_LEN 4
+ #define BOT_KNOWN_BOT_LABEL_LEN 12
+ #define BOT_PREFS_MAGIC 0x31504642UL
+-#define BOT_PREFS_VERSION 3
++#define BOT_PREFS_VERSION 4
+ #define BOT_PREFS_DEFAULT_LOCAL_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_INITIAL_LOCAL_ADVERT_MILLIS 60000UL
+@@ -45,9 +45,9 @@
+ #define BOT_PREFS_MAX_DELAY_MILLIS 60000U
+ #define BOT_PREFS_MAX_ADVERT_MILLIS (7UL * 24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_SERIALIZED_SIZE 296
+-#define BOT_HOP_STEP_MILLIS_DEFAULT 1500U
++#define BOT_HOP_STEP_MILLIS_DEFAULT 2500U
+ #define BOT_HOP_STEP_MILLIS_MAX 30000U
+-#define BOT_HOP_BIAS_MAX_MILLIS 8000UL
++#define BOT_HOP_BIAS_MAX_MILLIS 12000UL
+ 
+ enum BotChannelKind : uint8_t {
+   BOT_CHANNEL_DM = 0,
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index 3c310173..e228b7c8 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -322,7 +322,7 @@ BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& com
+   const char* connection = message.channel_kind == BOT_CHANNEL_DM
+                                 ? "direct"
+                                 : (message.channel_name[0] ? message.channel_name : "channel");
+-  int n = snprintf(output, output_len, "ack @[%s] %s", sender, connection);
++  int n = snprintf(output, output_len, "@[%s] %s", sender, connection);
+   if (n < 0) {
+     output[0] = 0;
+     return BOT_WRITE_NO_SPACE;
