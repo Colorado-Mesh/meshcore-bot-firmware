@@ -25,9 +25,9 @@ Three coordination/discoverability fixes:
    silently stop accepting new contacts when the table fills.
 ---
  examples/companion_radio/BotTypes.h |  1 +
- examples/companion_radio/MyMesh.cpp | 39 +++++++++++++++++++++--------
+ examples/companion_radio/MyMesh.cpp | 41 ++++++++++++++++++++++-------
  examples/companion_radio/MyMesh.h   |  3 +++
- 3 files changed, 33 insertions(+), 10 deletions(-)
+ 3 files changed, 35 insertions(+), 10 deletions(-)
 
 diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
 index 4fdd4bdd..d30fb7f2 100644
@@ -42,7 +42,7 @@ index 4fdd4bdd..d30fb7f2 100644
  #define BOT_PREFS_MAX_ADVERT_MILLIS (7UL * 24UL * 60UL * 60UL * 1000UL)
  #define BOT_PREFS_SERIALIZED_SIZE 296
 diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
-index 34517c44..a0472746 100644
+index 34517c44..9209dd86 100644
 --- a/examples/companion_radio/MyMesh.cpp
 +++ b/examples/companion_radio/MyMesh.cpp
 @@ -848,7 +848,7 @@ void MyMesh::applyBotPrefs() {
@@ -88,15 +88,17 @@ index 34517c44..a0472746 100644
  void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
                                    const char *text) {
    int i = 0;
-@@ -2421,6 +2433,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
-   _prefs.gps_interval = 0;      // No automatic GPS updates by default
- #if CMESH_BOT_ENABLED
-   _prefs.path_hash_mode = 1;
+@@ -2479,6 +2491,9 @@ void MyMesh::begin(bool has_display) {
+   _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
+   _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
+   _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
++#if CMESH_BOT_ENABLED
 +  _prefs.autoadd_config |= AUTO_ADD_OVERWRITE_OLDEST;
- #endif
-   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
- #if defined(USE_SX1262) || defined(USE_SX1268)
-@@ -2780,10 +2793,12 @@ void MyMesh::handleCmdFrame(size_t len) {
++#endif
+ 
+ #ifdef BLE_PIN_CODE // 123456 by default
+   if (_prefs.ble_pin == 0) {
+@@ -2780,10 +2795,12 @@ void MyMesh::handleCmdFrame(size_t len) {
      }
    } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
      mesh::Packet* pkt;
@@ -111,7 +113,7 @@ index 34517c44..a0472746 100644
      }
      if (pkt) {
        if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
-@@ -2864,10 +2879,12 @@ void MyMesh::handleCmdFrame(size_t len) {
+@@ -2864,10 +2881,12 @@ void MyMesh::handleCmdFrame(size_t len) {
      if (len < 1 + PUB_KEY_SIZE) {
        // export SELF
        mesh::Packet* pkt;
@@ -126,7 +128,7 @@ index 34517c44..a0472746 100644
        }
        if (pkt) {
          pkt->header |= ROUTE_TYPE_FLOOD; // would normally be sent in this mode
-@@ -3748,10 +3765,12 @@ void MyMesh::loop() {
+@@ -3748,10 +3767,12 @@ void MyMesh::loop() {
  
  bool MyMesh::advert() {
    mesh::Packet* pkt;
