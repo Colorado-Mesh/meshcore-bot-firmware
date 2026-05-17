@@ -1,0 +1,157 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 18:58:28 -0600
+Subject: [PATCH 6/6] Mark bot adverts, speed up initial advert, default
+ contacts auto-overwrite
+
+Three coordination/discoverability fixes:
+
+1. Add [MCBOT] marker to ALL self-advert paths, not just the bot's
+   scheduled one. CMD_SEND_SELF_ADVERT (companion app "advert" button),
+   CMD_EXPORT_CONTACT (export contact card), and MyMesh::advert()
+   (ENABLE_ADVERT_ON_BOOT) now route through a new getAdvertNodeName()
+   helper that appends [MCBOT] when bot_prefs.enabled. Previously the
+   suffix only appeared on the bot's own scheduled flood advert, which
+   defaulted to 24h, so the initial boot advert (which other nodes used
+   to create the contact entry) was a plain name and the [MCBOT] suffix
+   never propagated.
+
+2. Add BOT_PREFS_INITIAL_FLOOD_ADVERT_MILLIS (120s) and use it for the
+   first scheduled flood advert after boot, instead of the 24h interval.
+   Local advert already had a similar fast-initial constant.
+
+3. Enable AUTO_ADD_OVERWRITE_OLDEST by default in NodePrefs when
+   CMESH_BOT_ENABLED. Bots are deployment infrastructure and shouldn't
+   silently stop accepting new contacts when the table fills.
+---
+ examples/companion_radio/BotTypes.h |  1 +
+ examples/companion_radio/MyMesh.cpp | 39 +++++++++++++++++++++--------
+ examples/companion_radio/MyMesh.h   |  3 +++
+ 3 files changed, 33 insertions(+), 10 deletions(-)
+
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index 4fdd4bdd..d30fb7f2 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -43,6 +43,7 @@
+ #define BOT_PREFS_DEFAULT_LOCAL_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_INITIAL_LOCAL_ADVERT_MILLIS 60000UL
++#define BOT_PREFS_INITIAL_FLOOD_ADVERT_MILLIS 120000UL
+ #define BOT_PREFS_MAX_DELAY_MILLIS 60000U
+ #define BOT_PREFS_MAX_ADVERT_MILLIS (7UL * 24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_SERIALIZED_SIZE 296
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 34517c44..a0472746 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -848,7 +848,7 @@ void MyMesh::applyBotPrefs() {
+   }
+   if (bot_prefs.enabled) {
+     scheduleBotLocalAdvert(bot_prefs.local_advert_interval_ms ? BOT_PREFS_INITIAL_LOCAL_ADVERT_MILLIS : 0);
+-    scheduleBotFloodAdvert(bot_prefs.flood_advert_interval_ms);
++    scheduleBotFloodAdvert(bot_prefs.flood_advert_interval_ms ? BOT_PREFS_INITIAL_FLOOD_ADVERT_MILLIS : 0);
+   } else {
+     scheduleBotLocalAdvert(0);
+     scheduleBotFloodAdvert(0);
+@@ -1996,11 +1996,11 @@ void MyMesh::sendQueuedEmergencyForwards() {
+ bool MyMesh::sendBotSelfAdvert(bool flood) {
+   mesh::Packet* pkt;
+   char bot_advert_name[sizeof(((ContactInfo*)0)->name)];
+-  FirmwareBot::writeBotAdvertName(_prefs.node_name, bot_advert_name, sizeof(bot_advert_name), NULL);
++  const char* adv_name = getAdvertNodeName(bot_advert_name, sizeof(bot_advert_name));
+   if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-    pkt = createSelfAdvert(bot_advert_name);
++    pkt = createSelfAdvert(adv_name);
+   } else {
+-    pkt = createSelfAdvert(bot_advert_name, sensors.node_lat, sensors.node_lon);
++    pkt = createSelfAdvert(adv_name, sensors.node_lat, sensors.node_lon);
+   }
+   if (!pkt) return false;
+ 
+@@ -2041,6 +2041,18 @@ void MyMesh::tickBot() {
+ }
+ #endif
+ 
++const char* MyMesh::getAdvertNodeName(char* buf, size_t buf_len) {
++#if CMESH_BOT_ENABLED
++  if (bot_prefs.enabled && buf && buf_len > 0) {
++    FirmwareBot::writeBotAdvertName(_prefs.node_name, buf, buf_len, NULL);
++    return buf;
++  }
++#endif
++  (void)buf;
++  (void)buf_len;
++  return _prefs.node_name;
++}
++
+ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
+                                   const char *text) {
+   int i = 0;
+@@ -2421,6 +2433,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
+   _prefs.gps_interval = 0;      // No automatic GPS updates by default
+ #if CMESH_BOT_ENABLED
+   _prefs.path_hash_mode = 1;
++  _prefs.autoadd_config |= AUTO_ADD_OVERWRITE_OLDEST;
+ #endif
+   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
+ #if defined(USE_SX1262) || defined(USE_SX1268)
+@@ -2780,10 +2793,12 @@ void MyMesh::handleCmdFrame(size_t len) {
+     }
+   } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
+     mesh::Packet* pkt;
++    char adv_buf[sizeof(((ContactInfo*)0)->name)];
++    const char* adv_name = getAdvertNodeName(adv_buf, sizeof(adv_buf));
+     if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-      pkt = createSelfAdvert(_prefs.node_name);
++      pkt = createSelfAdvert(adv_name);
+     } else {
+-      pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
++      pkt = createSelfAdvert(adv_name, sensors.node_lat, sensors.node_lon);
+     }
+     if (pkt) {
+       if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
+@@ -2864,10 +2879,12 @@ void MyMesh::handleCmdFrame(size_t len) {
+     if (len < 1 + PUB_KEY_SIZE) {
+       // export SELF
+       mesh::Packet* pkt;
++      char adv_buf[sizeof(((ContactInfo*)0)->name)];
++      const char* adv_name = getAdvertNodeName(adv_buf, sizeof(adv_buf));
+       if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-        pkt = createSelfAdvert(_prefs.node_name);
++        pkt = createSelfAdvert(adv_name);
+       } else {
+-        pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
++        pkt = createSelfAdvert(adv_name, sensors.node_lat, sensors.node_lon);
+       }
+       if (pkt) {
+         pkt->header |= ROUTE_TYPE_FLOOD; // would normally be sent in this mode
+@@ -3748,10 +3765,12 @@ void MyMesh::loop() {
+ 
+ bool MyMesh::advert() {
+   mesh::Packet* pkt;
++  char adv_buf[sizeof(((ContactInfo*)0)->name)];
++  const char* adv_name = getAdvertNodeName(adv_buf, sizeof(adv_buf));
+   if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-    pkt = createSelfAdvert(_prefs.node_name);
++    pkt = createSelfAdvert(adv_name);
+   } else {
+-    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
++    pkt = createSelfAdvert(adv_name, sensors.node_lat, sensors.node_lon);
+   }
+   if (pkt) {
+     sendZeroHop(pkt);
+diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
+index 9685e89a..711bb69f 100644
+--- a/examples/companion_radio/MyMesh.h
++++ b/examples/companion_radio/MyMesh.h
+@@ -248,6 +248,9 @@ private:
+   bool sendBotSelfAdvert(bool flood);
+ #endif
+ 
++  const char* getAdvertNodeName(char* buf, size_t buf_len);
++
++
+   void checkCLIRescueCmd();
+   void checkSerialInterface();
+   bool isValidClientRepeatFreq(uint32_t f) const;
