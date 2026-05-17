@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 20:05:19 -0600
-Subject: [PATCH 09/12] Widen hop-step + drop "ack " prefix from test response
+Subject: [PATCH 09/13] Widen hop-step + drop "ack " prefix from test response
 
 Two changes:
 

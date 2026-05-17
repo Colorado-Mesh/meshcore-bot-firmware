@@ -1533,8 +1533,13 @@ static void test_response_coordinator_hop_count_ranking() {
                                                           base_delay, jitter, hop_step);
   uint32_t d2 = ResponseCoordinator::responseDelayMillis(two_hop, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
                                                           base_delay, jitter, hop_step);
-  assert(d1 == d0 + hop_step);
-  assert(d2 == d0 + (uint32_t)hop_step * 2);
+  // Linear + quadratic growth: bias(h) = h*step + h*h*grow
+  assert(d1 == d0 + (uint32_t)hop_step + BOT_HOP_GROW_MILLIS);
+  assert(d2 == d0 + (uint32_t)hop_step * 2 + 4 * BOT_HOP_GROW_MILLIS);
+  // Gap between hops widens as hop count rises:
+  uint32_t gap_0_to_1 = d1 - d0;
+  uint32_t gap_1_to_2 = d2 - d1;
+  assert(gap_1_to_2 > gap_0_to_1);
 
   uint32_t alt_step = 2000;
   uint32_t d0_alt = ResponseCoordinator::responseDelayMillis(near, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
@@ -1542,7 +1547,7 @@ static void test_response_coordinator_hop_count_ranking() {
   uint32_t d1_alt = ResponseCoordinator::responseDelayMillis(one_hop, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
                                                               base_delay, jitter, alt_step);
   assert(d0_alt == d0);
-  assert(d1_alt == d0 + alt_step);
+  assert(d1_alt == d0 + alt_step + BOT_HOP_GROW_MILLIS);
 
   BotMessage dm = make_message("dm", "!ping");
   dm.channel_kind = BOT_CHANNEL_DM;
@@ -1570,7 +1575,8 @@ static void test_response_coordinator_hop_bias_cap() {
   uint32_t dmany = ResponseCoordinator::responseDelayMillis(many_hops, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
                                                              base_delay, jitter, hop_step);
   assert(dmany == d0 + BOT_HOP_BIAS_MAX_MILLIS);
-  assert((uint32_t)many_hops.path_hash_count * hop_step > BOT_HOP_BIAS_MAX_MILLIS);
+  uint32_t hop_u32 = (uint32_t)many_hops.path_hash_count;
+  assert(hop_u32 * (uint32_t)hop_step + hop_u32 * hop_u32 * BOT_HOP_GROW_MILLIS > BOT_HOP_BIAS_MAX_MILLIS);
   assert(dmany + BOT_RESPONSE_DELAY_JITTER_MILLIS < BOT_RESPONSE_PENDING_TTL_MILLIS);
 }
 

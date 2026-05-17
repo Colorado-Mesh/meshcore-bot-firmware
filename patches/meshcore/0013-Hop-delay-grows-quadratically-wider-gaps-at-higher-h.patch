@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 22:18:02 -0600
+Subject: [PATCH 13/13] =?UTF-8?q?Hop=20delay=20grows=20quadratically=20?=
+ =?UTF-8?q?=E2=80=94=20wider=20gaps=20at=20higher=20hop=20counts?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+New formula: bias = hop * step + hop^2 * BOT_HOP_GROW_MILLIS
+
+Constants:
+  BOT_HOP_STEP_MILLIS_DEFAULT  3000 -> 2000
+  BOT_HOP_GROW_MILLIS           NEW = 400
+  BOT_HOP_BIAS_MAX_MILLIS    15000 -> 50000
+  BOT_RESPONSE_PENDING_TTL_MILLIS 75000 -> 95000
+  BOT_PREFS_VERSION              5 -> 6
+
+Hop -> bias / gap from previous:
+  1 ->  2400ms /   --
+  2 ->  5600ms / +3200
+  3 ->  9600ms / +4000
+  4 -> 14400ms / +4800
+  5 -> 20000ms / +5600
+  6 -> 26400ms / +6400
+  7 -> 33600ms / +7200
+  8 -> 41600ms / +8000
+  9+-> 50000ms (cap)
+
+Previous linear bias gave the same gap between every adjacent hop. At
+higher hop counts that wasn't enough: a 7-hop bot's scheduled delay was
+only one step longer than the 6-hop bot's, but the 6-hop bot's reply
+needed ~5-10s of mesh airtime to propagate one extra hop to the 7-hop
+bot. Result: the further bot fired before the closer bot's reply
+arrived -> token suppression never triggered.
+
+Now an N-hop bot has roughly 2*N*400ms more spacing than an (N-1)-hop
+bot, which keeps growing as the mesh gets deeper.
+---
+ examples/companion_radio/BotTypes.h              | 9 +++++----
+ examples/companion_radio/ResponseCoordinator.cpp | 6 +++++-
+ 2 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index 08fe8bc7..f3afa21f 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -30,14 +30,14 @@
+ #define BOT_NEIGHBOR_RECENT_MILLIS (60UL * 60UL * 1000UL)
+ #define BOT_RESPONSE_DELAY_BASE_MILLIS 1500UL
+ #define BOT_RESPONSE_DELAY_JITTER_MILLIS 2200UL
+-#define BOT_RESPONSE_PENDING_TTL_MILLIS 75000UL
++#define BOT_RESPONSE_PENDING_TTL_MILLIS 95000UL
+ #define BOT_RESPONSE_RECENT_TTL_MILLIS 30000UL
+ #define BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL 0x01
+ #define BOT_SENDER_KEY_PREFIX_LEN 6
+ #define BOT_MIN_AUTH_SENDER_KEY_PREFIX_LEN 4
+ #define BOT_KNOWN_BOT_LABEL_LEN 12
+ #define BOT_PREFS_MAGIC 0x31504642UL
+-#define BOT_PREFS_VERSION 5
++#define BOT_PREFS_VERSION 6
+ #define BOT_PREFS_DEFAULT_LOCAL_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_INITIAL_LOCAL_ADVERT_MILLIS 60000UL
+@@ -45,9 +45,10 @@
+ #define BOT_PREFS_MAX_DELAY_MILLIS 60000U
+ #define BOT_PREFS_MAX_ADVERT_MILLIS (7UL * 24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_SERIALIZED_SIZE 296
+-#define BOT_HOP_STEP_MILLIS_DEFAULT 3000U
++#define BOT_HOP_STEP_MILLIS_DEFAULT 2000U
+ #define BOT_HOP_STEP_MILLIS_MAX 30000U
+-#define BOT_HOP_BIAS_MAX_MILLIS 15000UL
++#define BOT_HOP_GROW_MILLIS 400UL
++#define BOT_HOP_BIAS_MAX_MILLIS 50000UL
+ 
+ enum BotChannelKind : uint8_t {
+   BOT_CHANNEL_DM = 0,
+diff --git a/examples/companion_radio/ResponseCoordinator.cpp b/examples/companion_radio/ResponseCoordinator.cpp
+index 3640f8b6..837b3f12 100644
+--- a/examples/companion_radio/ResponseCoordinator.cpp
++++ b/examples/companion_radio/ResponseCoordinator.cpp
+@@ -23,7 +23,11 @@ uint32_t channelDelayBias(BotChannelKind kind) {
+ 
+ uint32_t hopDelayBias(BotChannelKind kind, uint8_t path_hash_count, uint16_t hop_step_millis) {
+   if (kind == BOT_CHANNEL_DM) return 0;
+-  uint32_t bias = (uint32_t)path_hash_count * (uint32_t)hop_step_millis;
++  // Linear + quadratic growth: gap between consecutive hops widens with hop
++  // count, so a far bot always has more slack than a near bot to receive
++  // the near bot's reply before its own scheduled fire time.
++  uint32_t hop = (uint32_t)path_hash_count;
++  uint32_t bias = hop * (uint32_t)hop_step_millis + hop * hop * BOT_HOP_GROW_MILLIS;
+   if (bias > BOT_HOP_BIAS_MAX_MILLIS) bias = BOT_HOP_BIAS_MAX_MILLIS;
+   return bias;
+ }

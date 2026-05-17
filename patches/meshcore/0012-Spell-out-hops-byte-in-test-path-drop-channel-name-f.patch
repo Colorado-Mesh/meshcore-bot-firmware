@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 21:32:04 -0600
-Subject: [PATCH 12/12] Spell out hops/byte in test+path; drop channel name
+Subject: [PATCH 12/13] Spell out hops/byte in test+path; drop channel name
  from test ack
 
 Test response (writeAckResponse):
