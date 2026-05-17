@@ -539,7 +539,7 @@ static void test_ack_response_format() {
   char out[BOT_MAX_RESPONSE_LEN + 1];
   size_t written = 0;
   assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
-  assert(strcmp(out, "@[alice] #bot | 0h SNR 0.00 | recv 21:25:45 | hello") == 0);
+  assert(strcmp(out, "@[alice] | 0 hops, SNR 0.00 | recv 21:25:45 | hello") == 0);
   assert(written == strlen(out));
 
   message.channel_kind = BOT_CHANNEL_DM;
@@ -547,7 +547,7 @@ static void test_ack_response_format() {
   message.channel_name[0] = 0;
   assert(FirmwareBot::parseCommand("!t", 2, &command));
   assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
-  assert(strcmp(out, "@[unknown] direct | 0h SNR 0.00 | recv 21:25:45") == 0);
+  assert(strcmp(out, "@[unknown] direct | 0 hops, SNR 0.00 | recv 21:25:45") == 0);
 
   uint8_t path[] = { 0x12, 0x34, 0xab, 0xcd };
   message.channel_kind = BOT_CHANNEL_BOT;
@@ -558,7 +558,7 @@ static void test_ack_response_format() {
   message.path_hash_count = 2;
   message.packet_snr_quarters = -5;
   assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
-  assert(strcmp(out, "@[bob] #bot | 2h@2B SNR -1.25 | recv 21:25:45") == 0);
+  assert(strcmp(out, "@[bob] | 2 hops, 2-byte hashes, SNR -1.25 | recv 21:25:45") == 0);
   assert(strstr(out, "Bot test OK") == NULL);
 
   char small[16];
@@ -799,23 +799,23 @@ static void test_path_command() {
   context.path_snr_quarters = 23;
   BotCommandResult result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path 3h@2B SNR 5.75 | 1234 -> abcd -> 0001") == 0);
+  assert(strcmp(out, "Path 3 hops, 2-byte hashes, SNR 5.75 | 1234 -> abcd -> 0001") == 0);
 
   strncpy(context.response_target, "alice", sizeof(context.response_target) - 1);
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path @[alice] 3h@2B SNR 5.75 | 1234 -> abcd -> 0001") == 0);
+  assert(strcmp(out, "Path @[alice] 3 hops, 2-byte hashes, SNR 5.75 | 1234 -> abcd -> 0001") == 0);
   context.response_target[0] = 0;
 
   assert(FirmwareBot::parseCommand("!path 1234,abcd,0001", 20, &command));
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path 3h@2B | 1234 -> abcd -> 0001") == 0);
+  assert(strcmp(out, "Path 3 hops, 2-byte hashes | 1234 -> abcd -> 0001") == 0);
 
   assert(FirmwareBot::parseCommand("!path 1234abcd0001", 18, &command));
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path 3h@2B | 1234 -> abcd -> 0001") == 0);
+  assert(strcmp(out, "Path 3 hops, 2-byte hashes | 1234 -> abcd -> 0001") == 0);
 
   assert(FirmwareBot::parseCommand("!path 12,34", 11, &command));
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
@@ -830,7 +830,7 @@ static void test_path_command() {
   context.path_hash_size = 0;
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path 2h@4B | 12345678 -> abcdef01") == 0);
+  assert(strcmp(out, "Path 2 hops, 4-byte hashes | 12345678 -> abcdef01") == 0);
   context.path_hash_size = 2;
 
   assert(FirmwareBot::parseCommand("!path", 5, &command));
@@ -841,17 +841,17 @@ static void test_path_command() {
   context.path_snr_quarters = 0;
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path direct zero-hop SNR 0.00") == 0);
+  assert(strcmp(out, "Path direct zero-hop, SNR 0.00") == 0);
 
   context.path = NULL;
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path direct zero-hop SNR 0.00") == 0);
+  assert(strcmp(out, "Path direct zero-hop, SNR 0.00") == 0);
 
   strncpy(context.response_target, "alice", sizeof(context.response_target) - 1);
   result = BotCommands::executeCommand(command, context, out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert(strcmp(out, "Path @[alice] direct zero-hop SNR 0.00") == 0);
+  assert(strcmp(out, "Path @[alice] direct zero-hop, SNR 0.00") == 0);
   context.response_target[0] = 0;
 
   assert(FirmwareBot::parseCommand("!tracer", 7, &command));

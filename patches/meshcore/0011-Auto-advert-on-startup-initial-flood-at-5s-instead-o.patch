@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 20:49:51 -0600
-Subject: [PATCH 11/11] Auto-advert on startup (initial flood at 5s instead of
+Subject: [PATCH 11/12] Auto-advert on startup (initial flood at 5s instead of
  120s)
 
 BOT_PREFS_INITIAL_FLOOD_ADVERT_MILLIS 120000 -> 5000. The bot now sends

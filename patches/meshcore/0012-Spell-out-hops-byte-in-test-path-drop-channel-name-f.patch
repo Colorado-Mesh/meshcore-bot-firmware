@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 21:32:04 -0600
+Subject: [PATCH 12/12] Spell out hops/byte in test+path; drop channel name
+ from test ack
+
+Test response (writeAckResponse):
+- before: @[user] #bot | 2h@2B SNR -1.25 | recv 21:25:45
+- after : @[user] | 2 hops, 2-byte hashes, SNR -1.25 | recv 21:25:45
+
+DMs keep the 'direct' indicator; channel responses now omit the channel
+name (redundant in-channel) for readability.
+
+Path response (executePathLike + executePathArg):
+- before: Path @[user] 6h@2B SNR -8.50 | <path>
+- after : Path @[user] 6 hops, 2-byte hashes, SNR -8.50 | <path>
+- before: Path direct zero-hop SNR 0.00
+- after : Path direct zero-hop, SNR 0.00
+
+Trace and other responses unchanged for now.
+---
+ examples/companion_radio/BotCommands.cpp | 10 +++++-----
+ examples/companion_radio/FirmwareBot.cpp | 14 ++++++++------
+ 2 files changed, 13 insertions(+), 11 deletions(-)
+
+diff --git a/examples/companion_radio/BotCommands.cpp b/examples/companion_radio/BotCommands.cpp
+index 1aa4406d..198dc32f 100644
+--- a/examples/companion_radio/BotCommands.cpp
++++ b/examples/companion_radio/BotCommands.cpp
+@@ -381,15 +381,15 @@ BotCommandResult executePathLike(const BotCommandContext& context, char* output,
+   formatQuarters(context.path_snr_quarters, snr, sizeof(snr));
+   const char* target = context.response_target[0] ? context.response_target : NULL;
+   if (context.path_hash_count == 0 || context.path_len == 0) {
+-    if (target) return writeFormatted(output, output_len, "%s @[%s] direct zero-hop SNR %s", label, target, snr);
+-    return writeFormatted(output, output_len, "%s direct zero-hop SNR %s", label, snr);
++    if (target) return writeFormatted(output, output_len, "%s @[%s] direct zero-hop, SNR %s", label, target, snr);
++    return writeFormatted(output, output_len, "%s direct zero-hop, SNR %s", label, snr);
+   }
+   if (!context.path) return writeFormatted(output, output_len, "%s unavailable", label);
+ 
+   int written = target
+-                    ? snprintf(output, output_len, "%s @[%s] %uh@%uB SNR %s | ", label, target,
++                    ? snprintf(output, output_len, "%s @[%s] %u hops, %u-byte hashes, SNR %s | ", label, target,
+                                (unsigned)context.path_hash_count, (unsigned)context.path_hash_size, snr)
+-                    : snprintf(output, output_len, "%s %uh@%uB SNR %s | ", label,
++                    : snprintf(output, output_len, "%s %u hops, %u-byte hashes, SNR %s | ", label,
+                                (unsigned)context.path_hash_count, (unsigned)context.path_hash_size, snr);
+   if (written < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+   size_t pos = (size_t)written;
+@@ -402,7 +402,7 @@ BotCommandResult executePathArg(const BotCommand& command, const BotCommandConte
+   ParsedPathArg path;
+   if (!parsePathArgument(command.args, command.args_len, context.path_hash_size, &path)) return writeText(output, output_len, "Usage: path [path]");
+   if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+-  int written = snprintf(output, output_len, "Path %uh@%uB | ", (unsigned)path.hash_count, (unsigned)path.hash_size);
++  int written = snprintf(output, output_len, "Path %u hops, %u-byte hashes | ", (unsigned)path.hash_count, (unsigned)path.hash_size);
+   if (written < 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+   size_t pos = (size_t)written;
+   appendPathHops(output, output_len, &pos, path.bytes, path.hash_size, path.hash_count);
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index e228b7c8..afd44d41 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -319,10 +319,12 @@ BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& com
+   if (!output || output_len == 0) return BOT_WRITE_NO_SPACE;
+ 
+   const char* sender = message.sender_name[0] ? message.sender_name : "unknown";
+-  const char* connection = message.channel_kind == BOT_CHANNEL_DM
+-                                ? "direct"
+-                                : (message.channel_name[0] ? message.channel_name : "channel");
+-  int n = snprintf(output, output_len, "@[%s] %s", sender, connection);
++  int n;
++  if (message.channel_kind == BOT_CHANNEL_DM) {
++    n = snprintf(output, output_len, "@[%s] direct", sender);
++  } else {
++    n = snprintf(output, output_len, "@[%s]", sender);
++  }
+   if (n < 0) {
+     output[0] = 0;
+     return BOT_WRITE_NO_SPACE;
+@@ -337,9 +339,9 @@ BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& com
+   char path_block[40];
+   int path_n;
+   if (message.path_hash_count == 0 || message.path_hash_size == 0) {
+-    path_n = snprintf(path_block, sizeof(path_block), " | 0h SNR %s%d.%02d", sign, value / 4, (value % 4) * 25);
++    path_n = snprintf(path_block, sizeof(path_block), " | 0 hops, SNR %s%d.%02d", sign, value / 4, (value % 4) * 25);
+   } else {
+-    path_n = snprintf(path_block, sizeof(path_block), " | %uh@%uB SNR %s%d.%02d",
++    path_n = snprintf(path_block, sizeof(path_block), " | %u hops, %u-byte hashes, SNR %s%d.%02d",
+                       (unsigned)message.path_hash_count, (unsigned)message.path_hash_size, sign, value / 4,
+                       (value % 4) * 25);
+   }

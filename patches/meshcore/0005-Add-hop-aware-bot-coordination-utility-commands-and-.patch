@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 12:38:13 -0600
-Subject: [PATCH 05/11] Add hop-aware bot coordination, utility commands, and
+Subject: [PATCH 05/12] Add hop-aware bot coordination, utility commands, and
  bounded delays
 
 Adds new utility commands (TIME, LORA, ID, NEIGHBORS), neighbor tracking,

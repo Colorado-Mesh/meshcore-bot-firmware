@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Fri, 15 May 2026 19:58:42 -0600
-Subject: [PATCH 02/11] Harden firmware bot response coordination
+Subject: [PATCH 02/12] Harden firmware bot response coordination
 
 ---
  examples/companion_radio/BotCommands.cpp      |   2 +-
