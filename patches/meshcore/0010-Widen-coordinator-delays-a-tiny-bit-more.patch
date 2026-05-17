@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 20:31:12 -0600
+Subject: [PATCH 10/10] Widen coordinator delays a tiny bit more
+
+~25% bump across the main coordination knobs:
+- BOT_RESPONSE_DELAY_BASE_MILLIS   1200 -> 1500
+- BOT_RESPONSE_DELAY_JITTER_MILLIS 1800 -> 2200
+- BOT_HOP_STEP_MILLIS_DEFAULT      2500 -> 3000
+- BOT_HOP_BIAS_MAX_MILLIS         12000 -> 15000
+- BOT_RESPONSE_PENDING_TTL_MILLIS 60000 -> 75000
+
+BOT_PREFS_VERSION bumped 4 -> 5 so existing bots re-derive the new
+hop_step_ms default instead of carrying the old value.
+
+Gives near and far bots more breathing room so far bots reliably hear
+near bots' acks before firing their own (token suppression). Worst-case
+6-hop scheduled delay rises from ~17.6s to ~22.5s, still well under the
+new 75s TTL.
+---
+ examples/companion_radio/BotTypes.h | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index 5a953639..ee3f8984 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -28,16 +28,16 @@
+ #define BOT_KNOWN_BOT_SLOTS 8
+ #define BOT_NEIGHBOR_SLOTS 16
+ #define BOT_NEIGHBOR_RECENT_MILLIS (60UL * 60UL * 1000UL)
+-#define BOT_RESPONSE_DELAY_BASE_MILLIS 1200UL
+-#define BOT_RESPONSE_DELAY_JITTER_MILLIS 1800UL
+-#define BOT_RESPONSE_PENDING_TTL_MILLIS 60000UL
++#define BOT_RESPONSE_DELAY_BASE_MILLIS 1500UL
++#define BOT_RESPONSE_DELAY_JITTER_MILLIS 2200UL
++#define BOT_RESPONSE_PENDING_TTL_MILLIS 75000UL
+ #define BOT_RESPONSE_RECENT_TTL_MILLIS 30000UL
+ #define BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL 0x01
+ #define BOT_SENDER_KEY_PREFIX_LEN 6
+ #define BOT_MIN_AUTH_SENDER_KEY_PREFIX_LEN 4
+ #define BOT_KNOWN_BOT_LABEL_LEN 12
+ #define BOT_PREFS_MAGIC 0x31504642UL
+-#define BOT_PREFS_VERSION 4
++#define BOT_PREFS_VERSION 5
+ #define BOT_PREFS_DEFAULT_LOCAL_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_INITIAL_LOCAL_ADVERT_MILLIS 60000UL
+@@ -45,9 +45,9 @@
+ #define BOT_PREFS_MAX_DELAY_MILLIS 60000U
+ #define BOT_PREFS_MAX_ADVERT_MILLIS (7UL * 24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_SERIALIZED_SIZE 296
+-#define BOT_HOP_STEP_MILLIS_DEFAULT 2500U
++#define BOT_HOP_STEP_MILLIS_DEFAULT 3000U
+ #define BOT_HOP_STEP_MILLIS_MAX 30000U
+-#define BOT_HOP_BIAS_MAX_MILLIS 12000UL
++#define BOT_HOP_BIAS_MAX_MILLIS 15000UL
+ 
+ enum BotChannelKind : uint8_t {
+   BOT_CHANNEL_DM = 0,

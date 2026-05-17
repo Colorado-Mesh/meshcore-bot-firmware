@@ -1560,7 +1560,7 @@ static void test_response_coordinator_hop_bias_cap() {
   BotMessage near = make_message("#bot", "!ping");
   near.path_hash_count = 0;
   BotMessage many_hops = near;
-  many_hops.path_hash_count = 10;
+  many_hops.path_hash_count = 20;
   BotFingerprint request = { 0x0123456789ABCDEFULL };
   uint32_t base_delay = BOT_RESPONSE_DELAY_BASE_MILLIS;
   uint32_t jitter = BOT_RESPONSE_DELAY_JITTER_MILLIS;
