@@ -566,22 +566,6 @@ static void test_ack_response_format() {
   assert(strncmp(small, "ack @[bob]", 10) == 0);
 }
 
-static void test_bot_advert_marker() {
-  char out[32];
-  size_t written = 0;
-  assert(FirmwareBot::writeBotAdvertName("node", out, sizeof(out), &written) == BOT_WRITE_OK);
-  assert(strcmp(out, "node" BOT_ADVERT_MARKER) == 0);
-  assert(written == strlen(out));
-  assert(FirmwareBot::isBotAdvertName(out, strlen(out)));
-  assert(!FirmwareBot::isBotAdvertName("node", 4));
-  assert(!FirmwareBot::isBotAdvertName("node [bot]", 10));
-
-  char small[12];
-  assert(FirmwareBot::writeBotAdvertName("very-long-node-name", small, sizeof(small), &written) == BOT_WRITE_TRUNCATED);
-  assert(FirmwareBot::isBotAdvertName(small, strlen(small)));
-  assert(written == sizeof(small) - 1);
-}
-
 static BotMessage make_message(const char* channel, const char* text) {
   BotMessage message;
   memset(&message, 0, sizeof(message));
@@ -1661,7 +1645,6 @@ int main() {
   test_response_write();
   test_channel_text_and_response_guards();
   test_ack_response_format();
-  test_bot_advert_marker();
   test_command_outputs();
   test_path_command();
   test_trace_result_format();

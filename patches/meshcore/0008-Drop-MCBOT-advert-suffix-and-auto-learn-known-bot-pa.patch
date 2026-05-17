@@ -1,0 +1,227 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 19:55:36 -0600
+Subject: [PATCH 8/8] Drop [MCBOT] advert suffix and auto-learn known-bot path
+
+Removes BOT_ADVERT_MARKER / writeBotAdvertName / isBotAdvertName from
+FirmwareBot, autoLearnKnownBotAdvert and getAdvertNodeName from MyMesh,
+and reverts all four advert call sites (sendBotSelfAdvert,
+CMD_SEND_SELF_ADVERT, CMD_EXPORT_CONTACT, MyMesh::advert) to use
+_prefs.node_name directly.
+
+The suffix existed so peers could auto-add bots to the known-bot
+registry, which gated DM-only suppression in observeKnownBotResponse.
+Channel coordination now lands via the request-token mechanism added
+in patch 7, which doesn't depend on knowing-who-is-a-bot. DM
+collisions don't really happen (DMs are encrypted to one recipient),
+so the registry's auto-population was carrying its own weight only
+for visual identification of bots in contact lists -- not worth the
+naming pollution.
+
+The known-bot registry itself stays (still settable via `bot known
+add` from CLI rescue) for anyone who wants explicit DM suppression.
+---
+ examples/companion_radio/BotTypes.h      |  2 -
+ examples/companion_radio/FirmwareBot.cpp | 26 ------------
+ examples/companion_radio/FirmwareBot.h   |  2 -
+ examples/companion_radio/MyMesh.cpp      | 51 ++++--------------------
+ examples/companion_radio/MyMesh.h        |  4 --
+ 5 files changed, 8 insertions(+), 77 deletions(-)
+
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index d30fb7f2..ad249300 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -21,8 +21,6 @@
+ #define BOT_TRACE_TIMEOUT_MILLIS 30000UL
+ #define BOT_PENDING_TRACE_SLOTS 2
+ #define BOT_EMERGENCY_PREFIX "EMERGENCY MESSAGE FROM "
+-#define BOT_ADVERT_MARKER " [MCBOT]"
+-#define BOT_ADVERT_MARKER_LEN 8
+ #define BOT_EMERGENCY_MAX_PARTS 3
+ #define BOT_PENDING_EMERGENCY_SLOTS BOT_EMERGENCY_MAX_PARTS
+ #define BOT_COORDINATOR_PENDING_SLOTS 8
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index 24c79e81..3c310173 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -363,32 +363,6 @@ BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& com
+   return truncated ? BOT_WRITE_TRUNCATED : BOT_WRITE_OK;
+ }
+ 
+-BotWriteResult writeBotAdvertName(const char* node_name, char* output, size_t output_len, size_t* written) {
+-  if (written) *written = 0;
+-  if (!output || output_len == 0) return BOT_WRITE_NO_SPACE;
+-  if (output_len <= BOT_ADVERT_MARKER_LEN) {
+-    output[0] = 0;
+-    return BOT_WRITE_NO_SPACE;
+-  }
+-
+-  size_t base_len = boundedStrLen(node_name, output_len - 1);
+-  bool truncated = false;
+-  if (base_len + BOT_ADVERT_MARKER_LEN + 1 > output_len) {
+-    base_len = output_len - BOT_ADVERT_MARKER_LEN - 1;
+-    truncated = true;
+-  }
+-  if (base_len > 0) memcpy(output, node_name, base_len);
+-  memcpy(&output[base_len], BOT_ADVERT_MARKER, BOT_ADVERT_MARKER_LEN);
+-  output[base_len + BOT_ADVERT_MARKER_LEN] = 0;
+-  if (written) *written = base_len + BOT_ADVERT_MARKER_LEN;
+-  return truncated ? BOT_WRITE_TRUNCATED : BOT_WRITE_OK;
+-}
+-
+-bool isBotAdvertName(const char* name, size_t name_len) {
+-  if (!name || name_len < BOT_ADVERT_MARKER_LEN) return false;
+-  return memcmp(&name[name_len - BOT_ADVERT_MARKER_LEN], BOT_ADVERT_MARKER, BOT_ADVERT_MARKER_LEN) == 0;
+-}
+-
+ BotFingerprint fingerprintFor(const BotMessage& message) {
+   uint64_t hash = 1469598103934665603ULL;
+   hash = fnv1aUpdateChannel(hash, message);
+diff --git a/examples/companion_radio/FirmwareBot.h b/examples/companion_radio/FirmwareBot.h
+index 6e5cfd9a..708432a2 100644
+--- a/examples/companion_radio/FirmwareBot.h
++++ b/examples/companion_radio/FirmwareBot.h
+@@ -16,8 +16,6 @@ BotWriteResult writeResponseForChannel(BotChannelKind channel_kind, bool allow_p
+                                        size_t text_len, char* output, size_t output_len, size_t* written);
+ BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& command, char* output, size_t output_len,
+                                 size_t* written);
+-BotWriteResult writeBotAdvertName(const char* node_name, char* output, size_t output_len, size_t* written);
+-bool isBotAdvertName(const char* name, size_t name_len);
+ BotFingerprint fingerprintFor(const BotMessage& message);
+ BotFingerprint responseFingerprintFor(const BotMessage& message, const char* response_text, size_t response_text_len);
+ uint16_t requestToken(BotFingerprint request_fingerprint);
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 02339124..9121d42c 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -637,7 +637,6 @@ void MyMesh::onContactsFull() {
+ 
+ void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
+ #if CMESH_BOT_ENABLED
+-  autoLearnKnownBotAdvert(contact);
+   if ((path_len & 63) == 0) {
+     float rssi = radio_driver.getLastRSSI();
+     if (rssi > 32767.0f) rssi = 32767.0f;
+@@ -1167,21 +1166,6 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
+   }
+ }
+ 
+-bool MyMesh::autoLearnKnownBotAdvert(const ContactInfo &contact) {
+-  if (!bot_prefs.enabled || contact.type != ADV_TYPE_CHAT ||
+-      !FirmwareBot::isBotAdvertName(contact.name, botBoundedStrLen(contact.name, sizeof(contact.name)))) {
+-    return false;
+-  }
+-
+-  uint8_t key[BOT_SENDER_KEY_PREFIX_LEN];
+-  memcpy(key, contact.id.pub_key, sizeof(key));
+-  if (BotPrefsCodec::findKnownBot(bot_prefs, key)) return false;
+-  if (!BotPrefsCodec::addKnownBot(bot_prefs, key, BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL, "autobot")) return false;
+-  KnownBotRegistry::add(known_bot_entries, BOT_KNOWN_BOT_SLOTS, key, BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL, "autobot");
+-  saveBotPrefs();
+-  return true;
+-}
+-
+ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
+                                 const char *text, size_t text_len, BotFingerprint request_fingerprint,
+                                 BotFingerprint response_fingerprint) {
+@@ -2019,12 +2003,10 @@ void MyMesh::sendQueuedEmergencyForwards() {
+ 
+ bool MyMesh::sendBotSelfAdvert(bool flood) {
+   mesh::Packet* pkt;
+-  char bot_advert_name[sizeof(((ContactInfo*)0)->name)];
+-  const char* adv_name = getAdvertNodeName(bot_advert_name, sizeof(bot_advert_name));
+   if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-    pkt = createSelfAdvert(adv_name);
++    pkt = createSelfAdvert(_prefs.node_name);
+   } else {
+-    pkt = createSelfAdvert(adv_name, sensors.node_lat, sensors.node_lon);
++    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+   }
+   if (!pkt) return false;
+ 
+@@ -2065,17 +2047,6 @@ void MyMesh::tickBot() {
+ }
+ #endif
+ 
+-const char* MyMesh::getAdvertNodeName(char* buf, size_t buf_len) {
+-#if CMESH_BOT_ENABLED
+-  if (bot_prefs.enabled && buf && buf_len > 0) {
+-    FirmwareBot::writeBotAdvertName(_prefs.node_name, buf, buf_len, NULL);
+-    return buf;
+-  }
+-#endif
+-  (void)buf;
+-  (void)buf_len;
+-  return _prefs.node_name;
+-}
+ 
+ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
+                                   const char *text) {
+@@ -2819,12 +2790,10 @@ void MyMesh::handleCmdFrame(size_t len) {
+     }
+   } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
+     mesh::Packet* pkt;
+-    char adv_buf[sizeof(((ContactInfo*)0)->name)];
+-    const char* adv_name = getAdvertNodeName(adv_buf, sizeof(adv_buf));
+     if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-      pkt = createSelfAdvert(adv_name);
++      pkt = createSelfAdvert(_prefs.node_name);
+     } else {
+-      pkt = createSelfAdvert(adv_name, sensors.node_lat, sensors.node_lon);
++      pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+     }
+     if (pkt) {
+       if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
+@@ -2905,12 +2874,10 @@ void MyMesh::handleCmdFrame(size_t len) {
+     if (len < 1 + PUB_KEY_SIZE) {
+       // export SELF
+       mesh::Packet* pkt;
+-      char adv_buf[sizeof(((ContactInfo*)0)->name)];
+-      const char* adv_name = getAdvertNodeName(adv_buf, sizeof(adv_buf));
+       if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-        pkt = createSelfAdvert(adv_name);
++        pkt = createSelfAdvert(_prefs.node_name);
+       } else {
+-        pkt = createSelfAdvert(adv_name, sensors.node_lat, sensors.node_lon);
++        pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+       }
+       if (pkt) {
+         pkt->header |= ROUTE_TYPE_FLOOD; // would normally be sent in this mode
+@@ -3791,12 +3758,10 @@ void MyMesh::loop() {
+ 
+ bool MyMesh::advert() {
+   mesh::Packet* pkt;
+-  char adv_buf[sizeof(((ContactInfo*)0)->name)];
+-  const char* adv_name = getAdvertNodeName(adv_buf, sizeof(adv_buf));
+   if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+-    pkt = createSelfAdvert(adv_name);
++    pkt = createSelfAdvert(_prefs.node_name);
+   } else {
+-    pkt = createSelfAdvert(adv_name, sensors.node_lat, sensors.node_lon);
++    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+   }
+   if (pkt) {
+     sendZeroHop(pkt);
+diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
+index 711bb69f..46c3ff3c 100644
+--- a/examples/companion_radio/MyMesh.h
++++ b/examples/companion_radio/MyMesh.h
+@@ -216,7 +216,6 @@ private:
+   bool observeKnownBotResponse(const BotMessage &message, bool authoritative_sender);
+   bool observeBotGroupResponse(const BotMessage &message);
+   void buildBotCommandContext(BotCommandContext &context, BotCommandId command_id);
+-  bool autoLearnKnownBotAdvert(const ContactInfo &contact);
+   bool enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
+                           const char *text, size_t text_len, BotFingerprint request_fingerprint,
+                           BotFingerprint response_fingerprint);
+@@ -248,9 +247,6 @@ private:
+   bool sendBotSelfAdvert(bool flood);
+ #endif
+ 
+-  const char* getAdvertNodeName(char* buf, size_t buf_len);
+-
+-
+   void checkCLIRescueCmd();
+   void checkSerialInterface();
+   bool isValidClientRepeatFreq(uint32_t f) const;
