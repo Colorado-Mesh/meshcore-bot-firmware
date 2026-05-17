@@ -29,3 +29,5 @@ for patch in "${patches[@]}"; do
 done
 
 echo "Applied ${#patches[@]} MeshCore patch(es) to $(meshcore_commit)"
+
+python3 "${MESHCORE_FW_ROOT}/scripts/enable-bot-on-companion-envs.py"
