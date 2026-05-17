@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Sat, 16 May 2026 20:49:51 -0600
+Subject: [PATCH 11/11] Auto-advert on startup (initial flood at 5s instead of
+ 120s)
+
+BOT_PREFS_INITIAL_FLOOD_ADVERT_MILLIS 120000 -> 5000. The bot now sends
+its first flood advert ~5 seconds after boot, so the whole mesh learns
+the bot is up almost immediately. Subsequent flood adverts still
+default to once every 24h via BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS.
+---
+ examples/companion_radio/BotTypes.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index ee3f8984..08fe8bc7 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -41,7 +41,7 @@
+ #define BOT_PREFS_DEFAULT_LOCAL_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_INITIAL_LOCAL_ADVERT_MILLIS 60000UL
+-#define BOT_PREFS_INITIAL_FLOOD_ADVERT_MILLIS 120000UL
++#define BOT_PREFS_INITIAL_FLOOD_ADVERT_MILLIS 5000UL
+ #define BOT_PREFS_MAX_DELAY_MILLIS 60000U
+ #define BOT_PREFS_MAX_ADVERT_MILLIS (7UL * 24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_SERIALIZED_SIZE 296
