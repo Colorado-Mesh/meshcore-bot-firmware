@@ -8,9 +8,15 @@ is_excluded() {
   case "$1" in
     Heltec_v2_companion_radio_ble|\
     LilyGo_TLora_V2_1_1_6_companion_radio_ble|\
+    nibble_screen_connect_companion_radio_ble|\
+    nibble_screen_connect_companion_radio_usb|\
+    PicoW_companion_radio_usb|\
+    RAK_11310_companion_radio_usb|\
     Station_G2_companion_radio_ble|\
     Tbeam_SX1262_companion_radio_ble|\
-    Tbeam_SX1276_companion_radio_ble)
+    Tbeam_SX1276_companion_radio_ble|\
+    waveshare_rp2040_lora_companion_radio_usb|\
+    Xiao_rp2040_companion_radio_usb)
       return 0
       ;;
     *)
