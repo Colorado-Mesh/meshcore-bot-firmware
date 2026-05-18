@@ -1136,6 +1136,17 @@ static void test_fingerprint() {
   assert(fa.value == fb.value);
   assert(fa.value != fc.value);
 
+  BotMessage shifted = a;
+  shifted.sender_timestamp++;
+  assert(fa.value == FirmwareBot::fingerprintFor(shifted).value);
+
+  BotMessage dm = a;
+  dm.channel_kind = BOT_CHANNEL_DM;
+  dm.channel_name[0] = 0;
+  BotMessage later_dm = dm;
+  later_dm.sender_timestamp++;
+  assert(FirmwareBot::fingerprintFor(dm).value != FirmwareBot::fingerprintFor(later_dm).value);
+
   b.sender_key_prefix[0] = 99;
   assert(fa.value != FirmwareBot::fingerprintFor(b).value);
   b.sender_key_prefix[0] = a.sender_key_prefix[0];
@@ -1155,6 +1166,7 @@ static void test_group_request_token_uses_stable_channel_name() {
   c.channel_name[3] = 'T';
   c.channel_name[4] = 0;
   c.path_hash_count = 1;
+  b.sender_timestamp += 99;
 
   BotFingerprint fa = FirmwareBot::fingerprintFor(a);
   BotFingerprint fb = FirmwareBot::fingerprintFor(b);
@@ -1290,7 +1302,8 @@ static void test_response_coordinator_distinct_requests_same_response() {
   ResponseCoordinator::clear(pending, 2);
   BotMessage first = make_message("#bot", "!ping");
   BotMessage second = first;
-  second.sender_timestamp++;
+  strncpy(second.text, "!status", sizeof(second.text) - 1);
+  second.text_len = strlen(second.text);
   BotFingerprint first_request = FirmwareBot::fingerprintFor(first);
   BotFingerprint second_request = FirmwareBot::fingerprintFor(second);
   BotFingerprint response = FirmwareBot::responseFingerprintFor(first, "Pong!", 5);
@@ -1303,7 +1316,7 @@ static void test_response_coordinator_distinct_requests_same_response() {
   assert(response.value == FirmwareBot::responseFingerprintFor(second, "Pong!", 5).value);
   assert(ResponseCoordinator::schedule(pending, 2, first, BOT_COMMAND_PING, first_request, response, 1000, 0,
                                        identity_seed, 0, &scheduled, &first_due) == BOT_COORDINATOR_SCHEDULED);
-  assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_PING, second_request, response, 1000, 0,
+  assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_STATUS, second_request, response, 1000, 0,
                                        identity_seed, 0, &scheduled, &second_due) == BOT_COORDINATOR_SCHEDULED);
   assert(scheduled.value == second_request.value);
 
@@ -1323,7 +1336,8 @@ static void test_response_coordinator_suppression_uses_response_fingerprint() {
   ResponseCoordinator::clear(pending, 2);
   BotMessage first = make_message("#bot", "!ping");
   BotMessage second = first;
-  second.sender_timestamp++;
+  strncpy(second.text, "!status", sizeof(second.text) - 1);
+  second.text_len = strlen(second.text);
   BotFingerprint first_request = FirmwareBot::fingerprintFor(first);
   BotFingerprint second_request = FirmwareBot::fingerprintFor(second);
   BotFingerprint response = FirmwareBot::responseFingerprintFor(first, "Pong!", 5);
@@ -1332,7 +1346,7 @@ static void test_response_coordinator_suppression_uses_response_fingerprint() {
 
   assert(ResponseCoordinator::schedule(pending, 2, first, BOT_COMMAND_PING, first_request, response, 1000, 0,
                                        0x0A0B0C0DUL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
-  assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_PING, second_request, response, 1000, 0,
+  assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_STATUS, second_request, response, 1000, 0,
                                        0x0A0B0C0DUL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
   assert(ResponseCoordinator::suppress(pending, 2, response));
   BotCoordinatorReady ready = ResponseCoordinator::poll(pending, 2, 1000);
@@ -1363,7 +1377,8 @@ static void test_response_coordinator_distinct_path_outputs() {
   ResponseCoordinator::clear(pending, 2);
   BotMessage first = make_message("#bot", "path");
   BotMessage second = first;
-  second.sender_timestamp++;
+  strncpy(second.text, "status", sizeof(second.text) - 1);
+  second.text_len = strlen(second.text);
   uint8_t path_a[] = { 0x12, 0x34, 0x56, 0x78 };
   uint8_t path_b[] = { 0xab, 0xcd, 0xef, 0x01 };
   first.path = path_a;
@@ -1505,7 +1520,8 @@ static void test_response_coordinator_cancel_by_request() {
   ResponseCoordinator::clear(pending, 2);
   BotMessage first = make_message("#bot", "!ping");
   BotMessage second = first;
-  second.sender_timestamp++;
+  strncpy(second.text, "!status", sizeof(second.text) - 1);
+  second.text_len = strlen(second.text);
   BotFingerprint first_request = FirmwareBot::fingerprintFor(first);
   BotFingerprint second_request = FirmwareBot::fingerprintFor(second);
   BotFingerprint response = FirmwareBot::responseFingerprintFor(first, "Pong!", 5);
@@ -1515,7 +1531,7 @@ static void test_response_coordinator_cancel_by_request() {
 
   assert(ResponseCoordinator::schedule(pending, 2, first, BOT_COMMAND_PING, first_request, response, 1000, 0,
                                        0x01020304UL, 0, &scheduled, &first_due) == BOT_COORDINATOR_SCHEDULED);
-  assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_PING, second_request, response, 1000, 0,
+  assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_STATUS, second_request, response, 1000, 0,
                                        0x01020304UL, 0, &scheduled, &second_due) == BOT_COORDINATOR_SCHEDULED);
   assert(ResponseCoordinator::cancel(pending, 2, first_request));
   assert(!ResponseCoordinator::cancel(pending, 2, first_request));
@@ -1580,12 +1596,12 @@ static void test_response_coordinator_hop_count_ranking() {
                                                           base_delay, jitter, hop_step);
   uint32_t d2 = ResponseCoordinator::responseDelayMillis(two_hop, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
                                                           base_delay, jitter, hop_step);
-  // Linear + quadratic growth: bias(h) = h*step + h*h*grow
-  assert(d1 == d0 + (uint32_t)hop_step + BOT_HOP_GROW_MILLIS);
-  assert(d2 == d0 + (uint32_t)hop_step * 2 + 4 * BOT_HOP_GROW_MILLIS);
-  // Gap between hops widens as hop count rises:
+  uint32_t tier_step = (uint32_t)hop_step + jitter + BOT_TIE_BREAK_SPREAD_MILLIS + BOT_HOP_TIER_GUARD_MILLIS;
+  assert(d1 == d0 + tier_step + BOT_HOP_GROW_MILLIS);
+  assert(d2 == d0 + tier_step * 2 + 4 * BOT_HOP_GROW_MILLIS);
   uint32_t gap_0_to_1 = d1 - d0;
   uint32_t gap_1_to_2 = d2 - d1;
+  assert(gap_0_to_1 > jitter + BOT_TIE_BREAK_SPREAD_MILLIS);
   assert(gap_1_to_2 > gap_0_to_1);
 
   uint32_t alt_step = 2000;
@@ -1593,8 +1609,9 @@ static void test_response_coordinator_hop_count_ranking() {
                                                               base_delay, jitter, alt_step);
   uint32_t d1_alt = ResponseCoordinator::responseDelayMillis(one_hop, BOT_COMMAND_PING, request, 0x01020304UL, 0, 0,
                                                               base_delay, jitter, alt_step);
+  uint32_t alt_tier_step = alt_step + jitter + BOT_TIE_BREAK_SPREAD_MILLIS + BOT_HOP_TIER_GUARD_MILLIS;
   assert(d0_alt == d0);
-  assert(d1_alt == d0 + alt_step + BOT_HOP_GROW_MILLIS);
+  assert(d1_alt == d0 + alt_tier_step + BOT_HOP_GROW_MILLIS);
 
   BotMessage dm = make_message("dm", "!ping");
   dm.channel_kind = BOT_CHANNEL_DM;
@@ -1623,7 +1640,8 @@ static void test_response_coordinator_hop_bias_cap() {
                                                              base_delay, jitter, hop_step);
   assert(dmany == d0 + BOT_HOP_BIAS_MAX_MILLIS);
   uint32_t hop_u32 = (uint32_t)many_hops.path_hash_count;
-  assert(hop_u32 * (uint32_t)hop_step + hop_u32 * hop_u32 * BOT_HOP_GROW_MILLIS > BOT_HOP_BIAS_MAX_MILLIS);
+  uint32_t tier_step = (uint32_t)hop_step + jitter + BOT_TIE_BREAK_SPREAD_MILLIS + BOT_HOP_TIER_GUARD_MILLIS;
+  assert(hop_u32 * tier_step + hop_u32 * hop_u32 * BOT_HOP_GROW_MILLIS > BOT_HOP_BIAS_MAX_MILLIS);
   assert(dmany + BOT_RESPONSE_DELAY_JITTER_MILLIS < BOT_RESPONSE_PENDING_TTL_MILLIS);
 }
 
@@ -1640,13 +1658,41 @@ static void test_response_coordinator_same_hop_tiebreak() {
                                                              BOT_RESPONSE_DELAY_JITTER_MILLIS, hop_step);
   assert(bot_a != bot_b);
   uint32_t spread = bot_a > bot_b ? bot_a - bot_b : bot_b - bot_a;
-  assert(spread < 900);
+  assert(spread < BOT_TIE_BREAK_SPREAD_MILLIS);
+}
+
+static void test_response_coordinator_request_token_suppression() {
+  BotCoordinatorPending pending[2];
+  ResponseCoordinator::clear(pending, 2);
+  BotMessage first = make_message("#bot", "path");
+  BotMessage second = first;
+  strncpy(second.text, "test", sizeof(second.text) - 1);
+  second.text_len = strlen(second.text);
+  BotFingerprint first_request = FirmwareBot::fingerprintFor(first);
+  BotFingerprint second_request = FirmwareBot::fingerprintFor(second);
+  BotFingerprint first_response = FirmwareBot::responseFingerprintFor(first, "Path 1 hop", 10);
+  BotFingerprint second_response = FirmwareBot::responseFingerprintFor(second, "@[alice] | 1 hop", 16);
+  BotFingerprint scheduled;
+  uint32_t due = 0;
+
+  assert(ResponseCoordinator::schedule(pending, 2, first, BOT_COMMAND_PATH, first_request, first_response, 1000, 0,
+                                       0x01020304UL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
+  assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_TEST, second_request, second_response, 1000, 0,
+                                       0x01020304UL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
+  assert(ResponseCoordinator::suppressByRequestToken(pending, 2, FirmwareBot::requestToken(first_request)));
+  BotCoordinatorReady ready = ResponseCoordinator::poll(pending, 2, 1000);
+  assert(ready.result == BOT_COORDINATOR_READY_SUPPRESSED);
+  assert(ready.request_fingerprint.value == first_request.value);
+  ready = ResponseCoordinator::poll(pending, 2, due);
+  assert(ready.result == BOT_COORDINATOR_READY_SEND);
+  assert(ready.request_fingerprint.value == second_request.value);
 }
 
 static void test_response_coordinator_recent_responses() {
   BotCoordinatorRecent recent[1];
   ResponseCoordinator::clearRecent(recent, 1);
   BotFingerprint response = { 0xFEDCBA9876543210ULL };
+  BotFingerprint other_response = { 0x0123456789ABCDEFULL };
   BotFingerprint zero = { 0 };
 
   assert(!ResponseCoordinator::recentlySent(recent, 1, response, 1000));
@@ -1655,7 +1701,19 @@ static void test_response_coordinator_recent_responses() {
   ResponseCoordinator::recordRecent(recent, 1, response, 1000);
   assert(ResponseCoordinator::recentlySent(recent, 1, response, 1000));
   assert(ResponseCoordinator::recentlySent(recent, 1, response, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS - 1));
+
+  ResponseCoordinator::recordRequestToken(recent, 1, 0x1234, 1000 + 10);
+  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, 1000 + 10));
+  assert(ResponseCoordinator::recentlySent(recent, 1, response, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS - 1));
   assert(!ResponseCoordinator::recentlySent(recent, 1, response, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS));
+  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS));
+  assert(!ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, 1000 + 10 + BOT_RESPONSE_RECENT_TTL_MILLIS));
+
+  ResponseCoordinator::recordRequestToken(recent, 1, 0x5678, 2000);
+  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x5678, 2000));
+  ResponseCoordinator::recordRecent(recent, 1, other_response, 2000 + 1);
+  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x5678, 2000 + 1));
+  assert(ResponseCoordinator::recentlySent(recent, 1, other_response, 2000 + 1));
 }
 
 static void test_response_coordinator_rejects_non_normal() {
@@ -1724,6 +1782,7 @@ int main() {
   test_response_coordinator_schedule_preserves_suppression();
   test_response_coordinator_group_observed_response_suppresses();
   test_response_coordinator_group_guarded_path_output_suppresses();
+  test_response_coordinator_request_token_suppression();
   test_response_coordinator_suppress_expire_full();
   test_response_coordinator_cancel_by_request();
   test_response_coordinator_delay_biases();

@@ -56,10 +56,7 @@ jobs:
       - name: Enumerate companion USB+BLE environments and shard
         id: shards
         run: |
-          envs=$(grep -rhE '^\[env:' vendor/MeshCore/variants/ \
-                 | sort -u \
-                 | grep -E '_companion_radio_(usb|ble)\]$' \
-                 | sed -e 's/\[env://' -e 's/\]//')
+          envs=$(bash scripts/list-release-companion-envs.sh)
           count=$(printf '%s\n' "$envs" | wc -l | tr -d ' ')
           echo "env_count=$count" >> "$GITHUB_OUTPUT"
           echo "Found $count companion USB+BLE environments."
@@ -107,10 +104,7 @@ jobs:
       - name: Select envs for this shard
         id: select
         run: |
-          envs=$(grep -rhE '^\[env:' vendor/MeshCore/variants/ \
-                 | sort -u \
-                 | grep -E '_companion_radio_(usb|ble)\]$' \
-                 | sed -e 's/\[env://' -e 's/\]//')
+          envs=$(bash scripts/list-release-companion-envs.sh)
           shard_envs=$(printf '%s\n' "$envs" \
                        | awk -v shard=${{ matrix.shard }} -v total=8 'NR%total==shard')
           printf 'envs<<EOF\n%s\nEOF\n' "$shard_envs" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,416 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Mon, 18 May 2026 08:02:27 -0600
+Subject: [PATCH] Stabilize bot diagnostics and duplicate suppression
+
+---
+ examples/companion_radio/BotTypes.h           |  9 ++-
+ examples/companion_radio/FirmwareBot.cpp      | 49 +++++++------
+ examples/companion_radio/MyMesh.cpp           | 48 +++++++++---
+ .../companion_radio/ResponseCoordinator.cpp   | 73 +++++++++++++++----
+ .../companion_radio/ResponseCoordinator.h     |  4 +
+ 5 files changed, 136 insertions(+), 47 deletions(-)
+
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index f3afa21f..a54949d9 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -32,6 +32,8 @@
+ #define BOT_RESPONSE_DELAY_JITTER_MILLIS 2200UL
+ #define BOT_RESPONSE_PENDING_TTL_MILLIS 95000UL
+ #define BOT_RESPONSE_RECENT_TTL_MILLIS 30000UL
++#define BOT_TIE_BREAK_SPREAD_MILLIS 900UL
++#define BOT_HOP_TIER_GUARD_MILLIS 600UL
+ #define BOT_KNOWN_BOT_FLAG_SUPPRESS_NORMAL 0x01
+ #define BOT_SENDER_KEY_PREFIX_LEN 6
+ #define BOT_MIN_AUTH_SENDER_KEY_PREFIX_LEN 4
+@@ -292,9 +294,12 @@ struct BotCoordinatorPending {
+ };
+ 
+ struct BotCoordinatorRecent {
+-  bool active;
+   BotFingerprint response_fingerprint;
+-  uint32_t expires_at_millis;
++  uint32_t response_expires_at_millis;
++  uint32_t request_expires_at_millis;
++  uint16_t request_token;
++  bool active;
++  bool request_active;
+ };
+ 
+ struct BotCoordinatorReady {
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index afd44d41..d256e61a 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -320,11 +320,7 @@ BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& com
+ 
+   const char* sender = message.sender_name[0] ? message.sender_name : "unknown";
+   int n;
+-  if (message.channel_kind == BOT_CHANNEL_DM) {
+-    n = snprintf(output, output_len, "@[%s] direct", sender);
+-  } else {
+-    n = snprintf(output, output_len, "@[%s]", sender);
+-  }
++  n = snprintf(output, output_len, "@[%s]", sender);
+   if (n < 0) {
+     output[0] = 0;
+     return BOT_WRITE_NO_SPACE;
+@@ -370,7 +366,7 @@ BotFingerprint fingerprintFor(const BotMessage& message) {
+   hash = fnv1aUpdateChannel(hash, message);
+   hash = fnv1aUpdateBytes(hash, message.sender_key_prefix, sizeof(message.sender_key_prefix));
+   hash = fnv1aUpdateTextLower(hash, message.sender_name, boundedStrLen(message.sender_name, sizeof(message.sender_name)));
+-  hash = fnv1aUpdateU32(hash, message.sender_timestamp);
++  if (message.channel_kind == BOT_CHANNEL_DM) hash = fnv1aUpdateU32(hash, message.sender_timestamp);
+ 
+   char normalized[BOT_MAX_TEXT_LEN + 1];
+   size_t normalized_len = 0;
+@@ -381,6 +377,24 @@ BotFingerprint fingerprintFor(const BotMessage& message) {
+   return fingerprint;
+ }
+ 
++static int hexNibble(char c);
++
++bool parseRequestTokenPrefix(const char* text, size_t text_len, uint16_t* token, size_t* prefix_len) {
++  if (token) *token = 0;
++  if (prefix_len) *prefix_len = 0;
++  if (!text || text_len < 7) return false;
++  if (text[0] != '[' || text[5] != ']' || text[6] != ' ') return false;
++  uint16_t value = 0;
++  for (int i = 0; i < 4; i++) {
++    int n = hexNibble(text[1 + i]);
++    if (n < 0) return false;
++    value = (uint16_t)((value << 4) | (uint16_t)n);
++  }
++  if (token) *token = value;
++  if (prefix_len) *prefix_len = 7;
++  return true;
++}
++
+ BotFingerprint responseFingerprintFor(const BotMessage& message, const char* response_text, size_t response_text_len) {
+   uint64_t hash = 1469598103934665603ULL;
+   hash = fnv1aUpdateChannel(hash, message);
+@@ -389,6 +403,13 @@ BotFingerprint responseFingerprintFor(const BotMessage& message, const char* res
+     hash = fnv1aUpdateBytes(hash, message.sender_key_prefix, message.sender_key_prefix_len);
+   }
+ 
++  uint16_t token = 0;
++  size_t prefix_len = 0;
++  if (parseRequestTokenPrefix(response_text, response_text_len, &token, &prefix_len)) {
++    response_text += prefix_len;
++    response_text_len -= prefix_len;
++  }
++
+   char normalized[BOT_MAX_RESPONSE_LEN + 1];
+   size_t normalized_len = 0;
+   normalizeText(response_text, response_text_len, normalized, sizeof(normalized), &normalized_len);
+@@ -423,22 +444,6 @@ static int hexNibble(char c) {
+   return -1;
+ }
+ 
+-bool parseRequestTokenPrefix(const char* text, size_t text_len, uint16_t* token, size_t* prefix_len) {
+-  if (token) *token = 0;
+-  if (prefix_len) *prefix_len = 0;
+-  if (!text || text_len < 7) return false;            // "[XXXX] " = 7 chars minimum
+-  if (text[0] != '[' || text[5] != ']' || text[6] != ' ') return false;
+-  uint16_t value = 0;
+-  for (int i = 0; i < 4; i++) {
+-    int n = hexNibble(text[1 + i]);
+-    if (n < 0) return false;
+-    value = (uint16_t)((value << 4) | (uint16_t)n);
+-  }
+-  if (token) *token = value;
+-  if (prefix_len) *prefix_len = 7;
+-  return true;
+-}
+-
+ BotWriteResult prependRequestToken(BotFingerprint request_fingerprint, char* text, size_t text_len, size_t buf_len,
+                                    size_t* new_len) {
+   if (new_len) *new_len = text_len;
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 9121d42c..5d333328 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -120,9 +120,6 @@
+ #define DIRECT_SEND_PERHOP_EXTRA_MILLIS 250
+ #define LAZY_CONTACTS_WRITE_DELAY       5000
+ 
+-#if CMESH_BOT_ENABLED
+-#endif
+-
+ #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
+ 
+ #if CMESH_BOT_ENABLED
+@@ -1072,7 +1069,12 @@ void MyMesh::observeBotDirectMessage(const ContactInfo &from, uint32_t sender_ti
+     if (rssi < -32768.0f) rssi = -32768.0f;
+     recordBotNeighbor(from.id.pub_key, (int16_t)rssi, (int8_t)(packet->getSNR() * 4));
+   }
+-  if (from.out_path_len != OUT_PATH_UNKNOWN && mesh::Packet::isValidPathLen(from.out_path_len)) {
++  if (packet && packet->isRouteFlood() && packet->path_len <= 0xFF && mesh::Packet::isValidPathLen((uint8_t)packet->path_len)) {
++    message.path_len = (uint8_t)packet->path_len;
++    message.path_hash_size = packet->getPathHashSize();
++    message.path_hash_count = packet->getPathHashCount();
++    message.path = packet->path;
++  } else if (from.out_path_len != OUT_PATH_UNKNOWN && mesh::Packet::isValidPathLen(from.out_path_len)) {
+     message.path_len = from.out_path_len;
+     message.path_hash_size = (from.out_path_len >> 6) + 1;
+     message.path_hash_count = from.out_path_len & 63;
+@@ -1430,11 +1432,16 @@ bool MyMesh::dispatchBotTraceDirectLink(const BotMessage &message, const Contact
+   }
+ 
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
++  uint32_t now = _ms->getMillis();
++  if (!direct_recipient && ResponseCoordinator::recentlyAnswered(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
++                                                                 FirmwareBot::requestToken(request_fingerprint), now)) {
++    bot_stats.suppressed_responses++;
++    return true;
++  }
+   BotFingerprint response_fingerprint =
+       FirmwareBot::responseFingerprintFor(message, final_response, final_response_len);
+   BotFingerprint fingerprint;
+   uint32_t due_at_millis = 0;
+-  uint32_t now = _ms->getMillis();
+   uint32_t bot_identity_seed;
+   memcpy(&bot_identity_seed, self_id.pub_key, sizeof(bot_identity_seed));
+   uint32_t jitter_seed = (uint32_t)request_fingerprint.value ^ bot_identity_seed;
+@@ -1504,6 +1511,11 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+   if (!have_path || !botTracePathShapeValid(path_len, flags)) return false;
+ 
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
++  if (!direct_recipient && ResponseCoordinator::recentlyAnswered(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
++                                                                 FirmwareBot::requestToken(request_fingerprint), _ms->getMillis())) {
++    bot_stats.suppressed_responses++;
++    return true;
++  }
+   char response[BOT_MAX_RESPONSE_LEN + 1];
+   size_t response_len = botFormatTraceSent(response, sizeof(response), (uint8_t)(path_len / hash_size));
+   char final_response[BOT_MAX_RESPONSE_LEN + 1];
+@@ -1640,6 +1652,10 @@ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text,
+     bot_stats.sent_messages++;
+     ResponseCoordinator::recordRecent(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS, response_fingerprint,
+                                       now_millis);
++    if (!pending.direct) {
++      ResponseCoordinator::recordRequestToken(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
++                                              FirmwareBot::requestToken(pending.request_fingerprint), now_millis);
++    }
+   } else {
+     bot_stats.send_failures++;
+   }
+@@ -1747,6 +1763,7 @@ bool MyMesh::observeBotGroupResponse(const BotMessage &message) {
+   size_t token_prefix_len = 0;
+   bool token_suppressed = false;
+   if (FirmwareBot::parseRequestTokenPrefix(message.text, message.text_len, &token, &token_prefix_len)) {
++    ResponseCoordinator::recordRequestToken(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS, token, _ms->getMillis());
+     if (ResponseCoordinator::suppressByRequestToken(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, token)) {
+       token_suppressed = true;
+     }
+@@ -1790,7 +1807,6 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+     if (message.text_len > 0 && (message.text[0] == '!' || message.text[0] == '/')) bot_stats.parse_errors++;
+     return;
+   }
+-
+   if ((command.id != BOT_COMMAND_UNKNOWN && command.id != BOT_COMMAND_UNSUPPORTED &&
+        !BotPrefsCodec::commandEnabled(bot_prefs, command.id)) ||
+       FirmwareBot::isCommandOnCooldown(bot_command_cooldowns, BOT_COMMAND_COOLDOWN_SLOTS, command.id, _ms->getMillis())) {
+@@ -1869,6 +1885,11 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+   }
+ 
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
++  if (!direct_recipient && ResponseCoordinator::recentlyAnswered(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
++                                                                 FirmwareBot::requestToken(request_fingerprint), _ms->getMillis())) {
++    bot_stats.suppressed_responses++;
++    return;
++  }
+   BotFingerprint response_fingerprint = FirmwareBot::responseFingerprintFor(message, final_response, final_response_len);
+   BotFingerprint fingerprint;
+   uint32_t due_at_millis = 0;
+@@ -1904,7 +1925,6 @@ void MyMesh::sendQueuedBotResponses() {
+   while (true) {
+     BotCoordinatorReady ready = ResponseCoordinator::poll(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, now);
+     if (ready.result == BOT_COORDINATOR_READY_NONE) return;
+-
+     if (ready.result == BOT_COORDINATOR_READY_SUPPRESSED) {
+       bot_stats.suppressed_responses++;
+     } else if (ready.result == BOT_COORDINATOR_READY_EXPIRED) {
+@@ -1941,6 +1961,12 @@ void MyMesh::sendQueuedBotResponses() {
+       pending->active = false;
+       continue;
+     }
++    if (!pending->direct && ResponseCoordinator::recentlyAnswered(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
++                                                                  FirmwareBot::requestToken(ready.request_fingerprint), now)) {
++      bot_stats.suppressed_responses++;
++      pending->active = false;
++      continue;
++    }
+ 
+     bool success = false;
+     if (pending->direct) {
+@@ -1960,15 +1986,19 @@ void MyMesh::sendQueuedBotResponses() {
+       }
+     } else if (pending->channel_idx != 0xFF) {
+       ChannelDetails channel;
++      bool have_ch = getChannel(pending->channel_idx, channel);
+       uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
+-      success = getChannel(pending->channel_idx, channel) &&
+-                sendGroupMessage(timestamp, channel.channel, _prefs.node_name, pending->text, pending->text_len);
++      success = have_ch && sendGroupMessage(timestamp, channel.channel, _prefs.node_name, pending->text, pending->text_len);
+     }
+ 
+     if (success) {
+       bot_stats.sent_messages++;
+       ResponseCoordinator::recordRecent(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
+                                         pending->response_fingerprint, now);
++      if (!pending->direct) {
++        ResponseCoordinator::recordRequestToken(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
++                                                FirmwareBot::requestToken(pending->request_fingerprint), now);
++      }
+     } else {
+       bot_stats.send_failures++;
+     }
+diff --git a/examples/companion_radio/ResponseCoordinator.cpp b/examples/companion_radio/ResponseCoordinator.cpp
+index 837b3f12..888cdf49 100644
+--- a/examples/companion_radio/ResponseCoordinator.cpp
++++ b/examples/companion_radio/ResponseCoordinator.cpp
+@@ -14,6 +14,10 @@ bool sameFingerprint(BotFingerprint a, BotFingerprint b) {
+   return a.value == b.value;
+ }
+ 
++uint16_t requestToken(BotFingerprint fingerprint) {
++  return (uint16_t)(fingerprint.value & 0xFFFFu);
++}
++
+ uint32_t channelDelayBias(BotChannelKind kind) {
+   if (kind == BOT_CHANNEL_DM) return 0;
+   if (kind == BOT_CHANNEL_BOT) return 200;
+@@ -21,13 +25,11 @@ uint32_t channelDelayBias(BotChannelKind kind) {
+   return 800;
+ }
+ 
+-uint32_t hopDelayBias(BotChannelKind kind, uint8_t path_hash_count, uint16_t hop_step_millis) {
++uint32_t hopDelayBias(BotChannelKind kind, uint8_t path_hash_count, uint16_t hop_step_millis, uint16_t jitter_millis) {
+   if (kind == BOT_CHANNEL_DM) return 0;
+-  // Linear + quadratic growth: gap between consecutive hops widens with hop
+-  // count, so a far bot always has more slack than a near bot to receive
+-  // the near bot's reply before its own scheduled fire time.
+   uint32_t hop = (uint32_t)path_hash_count;
+-  uint32_t bias = hop * (uint32_t)hop_step_millis + hop * hop * BOT_HOP_GROW_MILLIS;
++  uint32_t tier_step = (uint32_t)hop_step_millis + (uint32_t)jitter_millis + BOT_TIE_BREAK_SPREAD_MILLIS + BOT_HOP_TIER_GUARD_MILLIS;
++  uint32_t bias = hop * tier_step + hop * hop * BOT_HOP_GROW_MILLIS;
+   if (bias > BOT_HOP_BIAS_MAX_MILLIS) bias = BOT_HOP_BIAS_MAX_MILLIS;
+   return bias;
+ }
+@@ -37,7 +39,7 @@ uint32_t tieBreakBias(BotFingerprint request_fingerprint, uint32_t bot_identity_
+   mixed ^= mixed >> 16;
+   mixed *= 0x7feb352dUL;
+   mixed ^= mixed >> 15;
+-  return mixed % 900UL;
++  return mixed % BOT_TIE_BREAK_SPREAD_MILLIS;
+ }
+ 
+ uint32_t queueDelayBias(uint8_t queue_depth) {
+@@ -82,7 +84,7 @@ uint32_t responseDelayMillis(const BotMessage& message, BotCommandId command_id,
+   (void)command_id;
+   uint32_t jitter = jitter_millis ? jitter_seed % jitter_millis : 0;
+   return (uint32_t)base_delay_millis + channelDelayBias(message.channel_kind) +
+-         hopDelayBias(message.channel_kind, message.path_hash_count, hop_step_millis) +
++         hopDelayBias(message.channel_kind, message.path_hash_count, hop_step_millis, jitter_millis) +
+          queueDelayBias(queue_depth) + tieBreakBias(request_fingerprint, bot_identity_seed) + jitter;
+ }
+ 
+@@ -163,7 +165,7 @@ bool suppressByRequestToken(BotCoordinatorPending pending[], size_t pending_coun
+   for (size_t i = 0; i < pending_count; i++) {
+     if (!pending[i].active) continue;
+     if (pending[i].request_fingerprint.value == 0) continue;
+-    uint16_t token = (uint16_t)(pending[i].request_fingerprint.value & 0xFFFFu);
++    uint16_t token = requestToken(pending[i].request_fingerprint);
+     if (token == request_token) {
+       pending[i].suppressed = true;
+       suppressed = true;
+@@ -228,12 +230,14 @@ void recordRecent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerp
+       slot = i;
+       break;
+     }
+-    if (slot == recent_count && (!recent[i].active || millisDue(now_millis, recent[i].expires_at_millis))) slot = i;
++    bool expired_response = !recent[i].active || recent[i].response_fingerprint.value == 0 || millisDue(now_millis, recent[i].response_expires_at_millis);
++    bool expired_request = !recent[i].active || !recent[i].request_active || millisDue(now_millis, recent[i].request_expires_at_millis);
++    if (slot == recent_count && expired_response && expired_request) slot = i;
+   }
+   if (slot == recent_count) slot = 0;
+   recent[slot].active = true;
+   recent[slot].response_fingerprint = response_fingerprint;
+-  recent[slot].expires_at_millis = now_millis + BOT_RESPONSE_RECENT_TTL_MILLIS;
++  recent[slot].response_expires_at_millis = now_millis + BOT_RESPONSE_RECENT_TTL_MILLIS;
+ }
+ 
+ bool recentlySent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerprint response_fingerprint,
+@@ -241,11 +245,52 @@ bool recentlySent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerp
+   if (!recent || response_fingerprint.value == 0) return false;
+   for (size_t i = 0; i < recent_count; i++) {
+     if (!recent[i].active) continue;
+-    if (millisDue(now_millis, recent[i].expires_at_millis)) {
+-      recent[i].active = false;
+-      continue;
++    if (millisDue(now_millis, recent[i].response_expires_at_millis)) {
++      recent[i].response_fingerprint.value = 0;
++    }
++    if (recent[i].response_fingerprint.value != 0 && sameFingerprint(recent[i].response_fingerprint, response_fingerprint)) return true;
++    if (recent[i].response_fingerprint.value == 0 && !recent[i].request_active) recent[i].active = false;
++  }
++  return false;
++}
++
++void recordRequestToken(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token,
++                        uint32_t now_millis) {
++  if (!recent || recent_count == 0) return;
++
++  size_t slot = recent_count;
++  for (size_t i = 0; i < recent_count; i++) {
++    if (recent[i].active && millisDue(now_millis, recent[i].response_expires_at_millis)) {
++      recent[i].response_fingerprint.value = 0;
++    }
++    if (recent[i].active && recent[i].request_active && millisDue(now_millis, recent[i].request_expires_at_millis)) {
++      recent[i].request_active = false;
++    }
++    if (recent[i].active && recent[i].request_active && recent[i].request_token == request_token) {
++      slot = i;
++      break;
++    }
++    bool expired_response = !recent[i].active || recent[i].response_fingerprint.value == 0;
++    bool expired_request = !recent[i].active || !recent[i].request_active;
++    if (slot == recent_count && expired_response && expired_request) slot = i;
++  }
++  if (slot == recent_count) slot = 0;
++  recent[slot].active = true;
++  recent[slot].request_active = true;
++  recent[slot].request_token = request_token;
++  recent[slot].request_expires_at_millis = now_millis + BOT_RESPONSE_RECENT_TTL_MILLIS;
++}
++
++bool recentlyAnswered(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token,
++                      uint32_t now_millis) {
++  if (!recent) return false;
++  for (size_t i = 0; i < recent_count; i++) {
++    if (!recent[i].active) continue;
++    if (recent[i].request_active && millisDue(now_millis, recent[i].request_expires_at_millis)) {
++      recent[i].request_active = false;
+     }
+-    if (sameFingerprint(recent[i].response_fingerprint, response_fingerprint)) return true;
++    if (recent[i].request_active && recent[i].request_token == request_token) return true;
++    if (recent[i].response_fingerprint.value == 0 && !recent[i].request_active) recent[i].active = false;
+   }
+   return false;
+ }
+diff --git a/examples/companion_radio/ResponseCoordinator.h b/examples/companion_radio/ResponseCoordinator.h
+index 7e053b44..c1b5ca04 100644
+--- a/examples/companion_radio/ResponseCoordinator.h
++++ b/examples/companion_radio/ResponseCoordinator.h
+@@ -39,5 +39,9 @@ void recordRecent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerp
+                   uint32_t now_millis);
+ bool recentlySent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerprint response_fingerprint,
+                   uint32_t now_millis);
++void recordRequestToken(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token,
++                        uint32_t now_millis);
++bool recentlyAnswered(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token,
++                      uint32_t now_millis);
+ 
+ }
