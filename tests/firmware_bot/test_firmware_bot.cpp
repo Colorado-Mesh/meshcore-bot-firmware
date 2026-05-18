@@ -1143,24 +1143,31 @@ static void test_fingerprint() {
   assert(fa.value != FirmwareBot::fingerprintFor(b).value);
 }
 
-static void test_channel_id_fingerprint() {
-  uint8_t channel_id_a[4] = { 0x10, 0x20, 0x30, 0x40 };
-  uint8_t channel_id_b[4] = { 0x10, 0x20, 0x30, 0x41 };
+static void test_group_request_token_uses_stable_channel_name() {
   BotMessage a = make_message("#bot", "!PING");
-  BotMessage b = make_message("#testing", "!ping");
-  BotMessage c = make_message("#ops", "!ping");
-  c.channel_kind = BOT_CHANNEL_BOT;
-  BotFingerprint fa = FirmwareBot::fingerprintFor(a, channel_id_a, sizeof(channel_id_a));
-  BotFingerprint fb = FirmwareBot::fingerprintFor(b, channel_id_a, sizeof(channel_id_a));
-  BotFingerprint fc = FirmwareBot::fingerprintFor(c, channel_id_a, sizeof(channel_id_a));
+  BotMessage b = make_message("bot", "!ping");
+  BotMessage c = a;
+  a.path_hash_count = 3;
+  b.path_hash_count = 7;
+  c.channel_name[0] = '#';
+  c.channel_name[1] = 'B';
+  c.channel_name[2] = 'O';
+  c.channel_name[3] = 'T';
+  c.channel_name[4] = 0;
+  c.path_hash_count = 1;
+
+  BotFingerprint fa = FirmwareBot::fingerprintFor(a);
+  BotFingerprint fb = FirmwareBot::fingerprintFor(b);
+  BotFingerprint fc = FirmwareBot::fingerprintFor(c);
   assert(fa.value == fb.value);
   assert(fa.value == fc.value);
-  assert(fa.value != FirmwareBot::fingerprintFor(a, channel_id_b, sizeof(channel_id_b)).value);
+  assert(FirmwareBot::requestToken(fa) == FirmwareBot::requestToken(fb));
+  assert(FirmwareBot::requestToken(fa) == FirmwareBot::requestToken(fc));
 
-  BotMessage dm = a;
-  dm.channel_kind = BOT_CHANNEL_DM;
-  dm.channel_name[0] = 0;
-  assert(FirmwareBot::fingerprintFor(dm, channel_id_a, sizeof(channel_id_a)).value == FirmwareBot::fingerprintFor(dm).value);
+  BotMessage other_channel = a;
+  strncpy(other_channel.channel_name, "#testing", sizeof(other_channel.channel_name) - 1);
+  other_channel.channel_kind = BOT_CHANNEL_TESTING;
+  assert(fa.value != FirmwareBot::fingerprintFor(other_channel).value);
 }
 
 static BotFingerprint final_response_fingerprint_for(const BotMessage& message, const char* text) {
@@ -1705,7 +1712,7 @@ int main() {
   test_known_bot_registry();
   test_known_bot_registry_ambiguous_short_prefix();
   test_fingerprint();
-  test_channel_id_fingerprint();
+  test_group_request_token_uses_stable_channel_name();
   test_response_fingerprint();
   test_response_fingerprint_ignores_request_token();
   test_authoritative_suppression_flow();
