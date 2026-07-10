@@ -7,10 +7,10 @@
 Companion-radio firmware for the Colorado Mesh community, built on top of
 [MeshCore](https://github.com/meshcore-dev/MeshCore). It adds an in-firmware
 "firmware bot" that responds to chat commands like `ping`, `trace`, `path`,
-`status`, `neighbors`, and `magic8`, with multi-bot response coordination so
-nearby Colorado bots don't all reply at once.
+`status`, `neighbors`, `sig`, and `magic8`, with multi-bot response
+coordination so nearby Colorado bots don't all reply at once.
 
-The bot runs entirely on-device — no internet, no companion-app bridge, no
+The bot runs entirely on-device: no internet, no companion-app bridge, no
 cloud. Useful as a low-friction probe / utility node on the Colorado mesh.
 
 ## What's different from upstream MeshCore
@@ -19,8 +19,9 @@ The release-built firmware applies a patch queue (`patches/meshcore/`) on top
 of a pinned MeshCore commit. The patches add:
 
 - A bot command registry (`help`, `cmd`, `ping`, `test`, `hello`, `about`,
-  `roll`, `dice`, `status`, `channels`, `version`, `stats`, `magic8`, `path`,
-  `trace`, `tracer`, `prefix`, `time`, `lora`, `id`, `neighbors`)
+  `roll`, `dice`, `coin`, `status`, `channels`, `version`, `stats`, `magic8`,
+  `path`, `trace`, `tracer`, `prefix`, `time`, `lora`, `id`, `neighbors`,
+  `sig`, `air`)
 - Channel-aware response policy (`#bot`, `#testing` for normal commands;
   `#emergency` for emergency forwards to `Public`; all other channels ignored)
 - Multi-bot response coordinator with hop-aware delay, bounded TTL, and
@@ -37,10 +38,12 @@ re-exported from the submodule.
 ## Supported boards
 
 The release workflow builds **every** `*_companion_radio_usb` and
-`*_companion_radio_ble` PlatformIO environment exposed by upstream MeshCore
-— 133 boards across ESP32, NRF52, RP2040, and STM32 platforms (Heltec V3,
-RAK 4631, LilyGo T-Echo, T-Beam, T-Deck, Xiao S3, Nano G2, ThinkNode,
-Meshtiny, Pico W, and many more). See the
+`*_companion_radio_ble` PlatformIO environment exposed by upstream MeshCore,
+minus a short exclusion list of BLE variants that don't fit flash (see
+`scripts/list-release-companion-envs.sh`). That is 139 boards at the current
+pin, across ESP32, NRF52, RP2040, and STM32 platforms (Heltec V3, RAK 4631,
+LilyGo T-Echo, T-Beam, T-Deck, Xiao S3, Nano G2, ThinkNode, Meshtiny, Pico W,
+and many more). See the
 [latest release assets](https://github.com/Colorado-Mesh/meshcore-bot-firmware/releases/latest)
 for the full list.
 
@@ -84,19 +87,22 @@ use `adafruit-nrfutil dfu serial -pkg <board>.zip -p <port>`.
 
 Once flashed, the bot joins the channels configured in its prefs. By default
 those are `#bot`, `#testing`, `#emergency`, and `Public`. Send commands on
-`#bot` (or DM the bot directly) without any prefix — for example:
+`#bot` (or DM the bot directly) without any prefix, for example:
 
 | Command | Response |
 |---|---|
 | `ping` | `Pong` |
 | `hello` | `Hello @[<your-name>], from <bot-name>` |
-| `path` | Compact route summary back to you, e.g. `Path 3h@2B SNR -6.25 \| 2751 -> ea4d -> 430d` |
+| `path` | Compact route summary back to you, e.g. `Path 3 hops, 2-byte hashes, SNR -6.25 \| 2751 -> ea4d -> 430d` |
 | `trace` | Active trace request along your reverse path |
+| `sig` | How the bot heard you: request SNR, plus local RSSI and noise floor |
 | `status` | Bot uptime, battery, storage, send counters |
 | `neighbors` | Nodes heard directly within the last hour |
+| `air` | TX/RX airtime and flood/direct packet counters |
 | `version` | Firmware version + build date |
 | `magic8 <question>` | Classic 8-ball answer |
-| `help` | List all commands |
+| `roll`, `dice`, `coin` | Random numbers, D&D dice, coin flips |
+| `help` | List chat commands (`cmd diag` lists the diagnostic set) |
 
 In any other channel the bot stays silent (except `#emergency`, which it
 re-forwards to `Public`).
@@ -107,14 +113,14 @@ wins the race and others suppress. This avoids spam on the channel.
 
 ## Layout
 
-- `vendor/MeshCore/` — pinned upstream MeshCore submodule.
-- `patches/meshcore/` — ordered patch queue applied to the submodule.
-- `colorado/` — Colorado Mesh overlay files, fixtures, and notes.
-- `scripts/` — wrapper scripts for patch, build, verify, and size-report
+- `vendor/MeshCore/`: pinned upstream MeshCore submodule.
+- `patches/meshcore/`: ordered patch queue applied to the submodule.
+- `colorado/`: Colorado Mesh overlay files, fixtures, and notes.
+- `scripts/`: wrapper scripts for patch, build, verify, and size-report
   workflows.
-- `tests/firmware_bot/` — host-side C++ unit tests for the bot code
+- `tests/firmware_bot/`: host-side C++ unit tests for the bot code
   (compile and run on your machine, no hardware required).
-- `.github/workflows/` — PR CI (`firmware-build.yml`) and tag-driven release
+- `.github/workflows/`: PR CI (`firmware-build.yml`) and tag-driven release
   (`release.yml`).
 
 ## Local development

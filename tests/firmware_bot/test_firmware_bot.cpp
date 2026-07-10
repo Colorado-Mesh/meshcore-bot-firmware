@@ -657,30 +657,48 @@ static void test_command_outputs() {
 
   result = run_command("!help", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert_starts_with(out, "Commands: help, cmd, ping");
+  assert_starts_with(out, "Commands: help cmd ping");
   assert(result.text_len <= BOT_MAX_GROUP_RESPONSE_LEN);
   assert_contains(out, "roll");
   assert_contains(out, "dice");
   assert_contains(out, "trace");
   assert_contains(out, "tracer");
-  assert_contains(out, "prefix");
+  assert_contains(out, "magic8");
+  assert_contains(out, "coin");
+  assert_contains(out, "cmd diag");
   assert_contains(out, "help <command>");
   assert(strstr(out, "weather") == NULL);
 
   result = run_command("!cmd", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
-  assert_starts_with(out, "Commands: test, ping, help, hello, about");
-  assert_contains(out, "prefix");
+  assert_starts_with(out, "Commands: help cmd ping test hello about");
+  assert(result.text_len <= BOT_MAX_GROUP_RESPONSE_LEN);
   assert_contains(out, "path");
   assert_contains(out, "dice");
   assert_contains(out, "roll");
-  assert_contains(out, "stats");
-  assert_contains(out, "time");
-  assert_contains(out, "lora");
-  assert_contains(out, "id");
-  assert_contains(out, "neighbors");
-  assert_contains(out, ", ");
+  assert_contains(out, "magic8");
+  assert_contains(out, "coin");
+  assert_contains(out, "cmd diag");
   assert(strstr(out, "weather") == NULL);
+
+  result = run_command("!cmd diag", out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert_starts_with(out, "Diag: status channels stats prefix time lora id neighbors sig air");
+  assert(result.text_len <= BOT_MAX_GROUP_RESPONSE_LEN);
+
+  // Every discoverable command must appear in either the chat or the diag
+  // listing, so a new registry entry can never silently miss discovery.
+  {
+    char chat[BOT_MAX_RESPONSE_LEN + 1];
+    char diag[BOT_MAX_RESPONSE_LEN + 1];
+    assert(run_command("!cmd", chat, sizeof(chat)).code == BOT_COMMAND_RESULT_OK);
+    assert(run_command("!cmd diag", diag, sizeof(diag)).code == BOT_COMMAND_RESULT_OK);
+    for (size_t i = 0; i < BotCommandRegistry::commandCount(); i++) {
+      const BotCommandMetadata* meta = BotCommandRegistry::commandAt(i);
+      if (!meta || meta->visibility != BOT_COMMAND_VISIBILITY_DISCOVERABLE) continue;
+      assert(strstr(chat, meta->name) != NULL || strstr(diag, meta->name) != NULL);
+    }
+  }
 
   result = run_command("!help roll", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
@@ -789,6 +807,62 @@ static void test_command_outputs() {
   result = run_command("!wat", out, sizeof(out));
   assert(result.code == BOT_COMMAND_RESULT_OK);
   assert(strcmp(out, "Unknown command. Try help") == 0);
+}
+
+static void test_sig_air_coin_commands() {
+  char out[BOT_MAX_RESPONSE_LEN + 1];
+  BotCommand command;
+
+  assert(FirmwareBot::parseCommand("!sig", 4, &command));
+  assert(command.id == BOT_COMMAND_SIG);
+  BotCommandContext context = make_context();
+  context.path_snr_quarters = 23;
+  context.last_rssi = -92;
+  context.noise_floor = -105;
+  BotCommandResult result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Sig: heard you at SNR 5.75 | last RSSI -92 dBm, noise -105 dBm") == 0);
+
+  strncpy(context.response_target, "alice", sizeof(context.response_target) - 1);
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Sig @[alice]: heard you at SNR 5.75 | last RSSI -92 dBm, noise -105 dBm") == 0);
+  context.response_target[0] = 0;
+
+  assert(FirmwareBot::parseCommand("!snr", 4, &command));
+  assert(command.id == BOT_COMMAND_SIG);
+  assert(FirmwareBot::parseCommand("!rssi", 5, &command));
+  assert(command.id == BOT_COMMAND_SIG);
+
+  assert(FirmwareBot::parseCommand("!air", 4, &command));
+  assert(command.id == BOT_COMMAND_AIR);
+  context.tx_airtime_seconds = 12;
+  context.rx_airtime_seconds = 345;
+  context.flood_recv = 10;
+  context.direct_recv = 3;
+  context.flood_sent = 5;
+  context.direct_sent = 2;
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Air: tx 12s rx 345s | rx flood 10 direct 3 | tx flood 5 direct 2") == 0);
+
+  assert(FirmwareBot::parseCommand("!airtime", 8, &command));
+  assert(command.id == BOT_COMMAND_AIR);
+
+  assert(FirmwareBot::parseCommand("!coin", 5, &command));
+  assert(command.id == BOT_COMMAND_COIN);
+  result = BotCommands::executeCommand(command, context, out, sizeof(out));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, "Coin: Heads") == 0 || strcmp(out, "Coin: Tails") == 0);
+
+  // Same seed must flip the same way; a different seed exercises the other path.
+  char again[BOT_MAX_RESPONSE_LEN + 1];
+  result = BotCommands::executeCommand(command, context, again, sizeof(again));
+  assert(result.code == BOT_COMMAND_RESULT_OK);
+  assert(strcmp(out, again) == 0);
+
+  assert(FirmwareBot::parseCommand("!flip", 5, &command));
+  assert(command.id == BOT_COMMAND_COIN);
 }
 
 static void test_path_command() {
@@ -1757,6 +1831,7 @@ int main() {
   test_channel_text_and_response_guards();
   test_ack_response_format();
   test_command_outputs();
+  test_sig_air_coin_commands();
   test_path_command();
   test_trace_result_format();
   test_dice_command();

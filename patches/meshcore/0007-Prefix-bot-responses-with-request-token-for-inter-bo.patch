@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 19:33:04 -0600
-Subject: [PATCH 07/14] Prefix bot responses with request token for inter-bot
+Subject: [PATCH 07/15] Prefix bot responses with request token for inter-bot
  suppression
 
 Adds a 4-hex request token (low 16 bits of the request fingerprint) as a
@@ -131,10 +131,10 @@ index 9eff340b..6e5cfd9a 100644
  size_t maxResponseLenForChannel(BotChannelKind channel_kind);
  bool isCommandOnCooldown(const BotCommandCooldown* cooldowns, size_t cooldown_count, BotCommandId command_id,
 diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
-index 9209dd86..02339124 100644
+index b2c47df4..d4bca6ce 100644
 --- a/examples/companion_radio/MyMesh.cpp
 +++ b/examples/companion_radio/MyMesh.cpp
-@@ -1209,6 +1209,11 @@ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *di
+@@ -1218,6 +1218,11 @@ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *di
    if (!botFormatResponseForChannel(message, text, text_len, pending->text, sizeof(pending->text), &pending->text_len)) {
      return false;
    }
@@ -146,7 +146,7 @@ index 9209dd86..02339124 100644
    pending->active = true;
    return true;
  }
-@@ -1613,6 +1618,17 @@ BotFingerprint MyMesh::traceResponseFingerprintFor(const PendingBotTrace &pendin
+@@ -1622,6 +1627,17 @@ BotFingerprint MyMesh::traceResponseFingerprintFor(const PendingBotTrace &pendin
  
  bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text, size_t text_len,
                                BotFingerprint response_fingerprint, uint32_t now_millis) {
@@ -164,7 +164,7 @@ index 9209dd86..02339124 100644
    bool success = false;
    if (pending.direct) {
      ContactInfo *recipient = lookupContactByPubKey(pending.recipient_pub_key, PUB_KEY_SIZE);
-@@ -1620,12 +1636,7 @@ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text,
+@@ -1629,12 +1645,7 @@ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text,
        uint32_t expected_ack = 0;
        uint32_t est_timeout = 0;
        uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
@@ -178,7 +178,7 @@ index 9209dd86..02339124 100644
        success = result != MSG_SEND_FAILED;
        if (success && expected_ack) {
          expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();
-@@ -1638,7 +1649,7 @@ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text,
+@@ -1647,7 +1658,7 @@ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text,
      ChannelDetails channel;
      uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
      success = getChannel(pending.channel_idx, channel) &&
@@ -187,7 +187,7 @@ index 9209dd86..02339124 100644
    }
  
    if (success) {
-@@ -1744,6 +1755,19 @@ bool MyMesh::observeKnownBotResponse(const BotMessage &message, bool authoritati
+@@ -1753,6 +1764,19 @@ bool MyMesh::observeKnownBotResponse(const BotMessage &message, bool authoritati
  
  bool MyMesh::observeBotGroupResponse(const BotMessage &message) {
    if (!BotPolicy::isPrefixlessCommandAllowed(message.channel_kind)) return false;
@@ -207,7 +207,7 @@ index 9209dd86..02339124 100644
    BotFingerprint fingerprint = FirmwareBot::responseFingerprintFor(message, message.text, message.text_len);
    if (ResponseCoordinator::recentlySent(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS, fingerprint, _ms->getMillis())) {
      return true;
-@@ -1751,7 +1775,7 @@ bool MyMesh::observeBotGroupResponse(const BotMessage &message) {
+@@ -1760,7 +1784,7 @@ bool MyMesh::observeBotGroupResponse(const BotMessage &message) {
    if (ResponseCoordinator::suppress(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, fingerprint)) {
      return true;
    }

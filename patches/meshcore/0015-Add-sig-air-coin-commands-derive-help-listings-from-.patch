@@ -1,0 +1,264 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: CJ Vana <cj@depth23.online>
+Date: Fri, 10 Jul 2026 15:19:21 -0600
+Subject: [PATCH 15/15] Add sig/air/coin commands; derive help listings from
+ the registry
+
+- sig (aliases snr/rssi/signal): reports the SNR the bot heard the
+  request at, plus local last-RSSI and noise floor - range testing aid
+- air (alias airtime): TX/RX airtime and flood/direct packet counters
+- coin (aliases flip/coinflip): coin flip alongside roll/dice/magic8
+- help and cmd listings now walk the command registry filtered by
+  context class (chat vs 'cmd diag') instead of hand-picked id arrays
+  that had drifted (magic8 was missing from both)
+- BOT_PREFS_VERSION 6 -> 7 so deployed bots re-default command_mask
+  and pick up the mask bits for the added commands
+---
+ .../companion_radio/BotCommandRegistry.cpp    | 12 +++
+ examples/companion_radio/BotCommands.cpp      | 81 ++++++++++++++-----
+ examples/companion_radio/BotTypes.h           | 15 +++-
+ examples/companion_radio/MyMesh.cpp           |  8 +-
+ 4 files changed, 89 insertions(+), 27 deletions(-)
+
+diff --git a/examples/companion_radio/BotCommandRegistry.cpp b/examples/companion_radio/BotCommandRegistry.cpp
+index c429259c..65fed686 100644
+--- a/examples/companion_radio/BotCommandRegistry.cpp
++++ b/examples/companion_radio/BotCommandRegistry.cpp
+@@ -14,6 +14,9 @@ const char* const kChannelsAliases[] = { "channel" };
+ const char* const kPathAliases[] = { "p", "decode", "route" };
+ const char* const kPrefixAliases[] = { "lookup" };
+ const char* const kNeighborsAliases[] = { "near" };
++const char* const kSigAliases[] = { "snr", "rssi", "signal" };
++const char* const kAirAliases[] = { "airtime" };
++const char* const kCoinAliases[] = { "flip", "coinflip" };
+ 
+ size_t boundedStrLen(const char* value, size_t max_len) {
+   size_t len = 0;
+@@ -74,6 +77,15 @@ const BotCommandMetadata kCommands[] = {
+   { BOT_COMMAND_NEIGHBORS, "neighbors", kNeighborsAliases, 1, BOT_COMMAND_MASK_NEIGHBORS, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
+     BOT_COMMAND_CONTEXT_DIAGNOSTIC, "Show recent direct neighbors", "neighbors",
+     "Show nodes heard directly within the last hour with RSSI and SNR." },
++  { BOT_COMMAND_SIG, "sig", kSigAliases, 3, BOT_COMMAND_MASK_SIG, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
++    BOT_COMMAND_CONTEXT_DIAGNOSTIC, "Report received signal", "sig",
++    "Show how the bot heard your request: SNR plus local RSSI and noise floor." },
++  { BOT_COMMAND_AIR, "air", kAirAliases, 1, BOT_COMMAND_MASK_AIR, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
++    BOT_COMMAND_CONTEXT_DIAGNOSTIC, "Show radio airtime", "air",
++    "Show local TX/RX airtime and flood/direct packet counters." },
++  { BOT_COMMAND_COIN, "coin", kCoinAliases, 2, BOT_COMMAND_MASK_COIN, BOT_COMMAND_VISIBILITY_DISCOVERABLE,
++    BOT_COMMAND_CONTEXT_NORMAL, "Flip a coin", "coin",
++    "Flip a coin and report heads or tails." },
+   { BOT_COMMAND_UNKNOWN, "unknown", NULL, 0, 0, BOT_COMMAND_VISIBILITY_INTERNAL,
+     BOT_COMMAND_CONTEXT_INTERNAL, "Unknown command", "unknown", "Internal unknown-command handler." }
+ };
+diff --git a/examples/companion_radio/BotCommands.cpp b/examples/companion_radio/BotCommands.cpp
+index 198dc32f..4fbbbee0 100644
+--- a/examples/companion_radio/BotCommands.cpp
++++ b/examples/companion_radio/BotCommands.cpp
+@@ -313,45 +313,55 @@ void formatQuarters(int8_t quarters, char* output, size_t output_len) {
+   snprintf(output, output_len, "%s%d.%02d", sign, value / 4, (value % 4) * 25);
+ }
+ 
+-void appendCommandList(char* output, size_t output_len, size_t* pos, const BotCommandId* ids, size_t id_count) {
++bool commandInClasses(const BotCommandMetadata* command, const BotCommandContextClass* classes, size_t class_count) {
++  for (size_t i = 0; i < class_count; i++) {
++    if (command->context_class == classes[i]) return true;
++  }
++  return false;
++}
++
++// Listings are derived from the registry so an added command can never
++// be missed; classes split the list because all commands do not fit one
++// group-channel message.
++void appendCommandsByClass(char* output, size_t output_len, size_t* pos, const BotCommandContextClass* classes,
++                           size_t class_count) {
+   bool first = true;
+-  for (size_t i = 0; i < id_count; i++) {
+-    const BotCommandMetadata* command = BotCommandRegistry::findById(ids[i]);
++  for (size_t i = 0; i < BotCommandRegistry::commandCount(); i++) {
++    const BotCommandMetadata* command = BotCommandRegistry::commandAt(i);
+     if (!command || command->visibility != BOT_COMMAND_VISIBILITY_DISCOVERABLE) continue;
+-    if (!first) appendText(output, output_len, pos, ", ");
++    if (!commandInClasses(command, classes, class_count)) continue;
++    if (!first) appendText(output, output_len, pos, " ");
+     appendText(output, output_len, pos, command->name);
+     first = false;
+   }
+ }
+ 
+-BotCommandResult executeCmd(char* output, size_t output_len) {
+-  static const BotCommandId ids[] = {
+-    BOT_COMMAND_TEST, BOT_COMMAND_PING, BOT_COMMAND_HELP, BOT_COMMAND_HELLO, BOT_COMMAND_ABOUT,
+-    BOT_COMMAND_ROLL, BOT_COMMAND_DICE, BOT_COMMAND_STATUS, BOT_COMMAND_CHANNELS, BOT_COMMAND_VERSION,
+-    BOT_COMMAND_STATS, BOT_COMMAND_PATH, BOT_COMMAND_TRACE, BOT_COMMAND_TRACER, BOT_COMMAND_PREFIX,
+-    BOT_COMMAND_TIME, BOT_COMMAND_LORA, BOT_COMMAND_ID, BOT_COMMAND_NEIGHBORS
+-  };
++const BotCommandContextClass kChatClasses[] = { BOT_COMMAND_CONTEXT_NORMAL, BOT_COMMAND_CONTEXT_TRACE };
++const BotCommandContextClass kDiagClasses[] = { BOT_COMMAND_CONTEXT_DIAGNOSTIC, BOT_COMMAND_CONTEXT_LOCAL_CONTACT };
++
++BotCommandResult executeCmd(const BotCommand& command, char* output, size_t output_len) {
+   if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+   output[0] = 0;
+   size_t pos = 0;
++  if (textEqualsIgnoreCase(command.args, command.args_len, "diag")) {
++    appendText(output, output_len, &pos, "Diag: ");
++    appendCommandsByClass(output, output_len, &pos, kDiagClasses, 2);
++    return resultForAppend(output, output_len, pos);
++  }
+   appendText(output, output_len, &pos, "Commands: ");
+-  appendCommandList(output, output_len, &pos, ids, sizeof(ids) / sizeof(ids[0]));
++  appendCommandsByClass(output, output_len, &pos, kChatClasses, 2);
++  appendText(output, output_len, &pos, " | cmd diag");
+   return resultForAppend(output, output_len, pos);
+ }
+ 
+ BotCommandResult executeHelp(const BotCommand& command, char* output, size_t output_len) {
+   if (command.args_len == 0) {
+-    static const BotCommandId ids[] = {
+-      BOT_COMMAND_HELP, BOT_COMMAND_CMD, BOT_COMMAND_PING, BOT_COMMAND_TEST, BOT_COMMAND_HELLO, BOT_COMMAND_ROLL,
+-      BOT_COMMAND_DICE, BOT_COMMAND_TRACE, BOT_COMMAND_TRACER, BOT_COMMAND_PREFIX, BOT_COMMAND_TIME,
+-      BOT_COMMAND_LORA, BOT_COMMAND_ID, BOT_COMMAND_NEIGHBORS
+-    };
+     if (!output || output_len == 0) return makeResult(BOT_COMMAND_RESULT_NO_SPACE, 0);
+     output[0] = 0;
+     size_t pos = 0;
+     appendText(output, output_len, &pos, "Commands: ");
+-    appendCommandList(output, output_len, &pos, ids, sizeof(ids) / sizeof(ids[0]));
+-    appendText(output, output_len, &pos, "; help <command>");
++    appendCommandsByClass(output, output_len, &pos, kChatClasses, 2);
++    appendText(output, output_len, &pos, " | cmd diag | help <command>");
+     return resultForAppend(output, output_len, pos);
+   }
+ 
+@@ -531,6 +541,31 @@ uint8_t batteryPercentFromMillivolts(uint16_t mv) {
+   return (uint8_t)(((uint32_t)(mv - kEmpty) * 100UL) / (uint32_t)(kFull - kEmpty));
+ }
+ 
++BotCommandResult executeSig(const BotCommandContext& context, char* output, size_t output_len) {
++  char snr[8];
++  formatQuarters(context.path_snr_quarters, snr, sizeof(snr));
++  const char* target = context.response_target[0] ? context.response_target : NULL;
++  if (target) {
++    return writeFormatted(output, output_len, "Sig @[%s]: heard you at SNR %s | last RSSI %d dBm, noise %d dBm", target,
++                          snr, (int)context.last_rssi, (int)context.noise_floor);
++  }
++  return writeFormatted(output, output_len, "Sig: heard you at SNR %s | last RSSI %d dBm, noise %d dBm", snr,
++                        (int)context.last_rssi, (int)context.noise_floor);
++}
++
++BotCommandResult executeAir(const BotCommandContext& context, char* output, size_t output_len) {
++  return writeFormatted(output, output_len, "Air: tx %lus rx %lus | rx flood %lu direct %lu | tx flood %lu direct %lu",
++                        (unsigned long)context.tx_airtime_seconds, (unsigned long)context.rx_airtime_seconds,
++                        (unsigned long)context.flood_recv, (unsigned long)context.direct_recv,
++                        (unsigned long)context.flood_sent, (unsigned long)context.direct_sent);
++}
++
++BotCommandResult executeCoin(const BotCommandContext& context, char* output, size_t output_len) {
++  uint32_t state = context.random_seed ^ 0x636F696EUL;
++  if (state == 0) state = 1;
++  return writeFormatted(output, output_len, "Coin: %s", rollOnce(&state, 2) == 1 ? "Heads" : "Tails");
++}
++
+ BotCommandResult executeTest(const BotCommand& command, const BotCommandContext& context, char* output, size_t output_len) {
+   const char* name = context.node_name[0] ? context.node_name : "local";
+   char received_at[9];
+@@ -591,7 +626,7 @@ BotCommandResult executeCommand(const BotCommand& command, const BotCommandConte
+     case BOT_COMMAND_HELP:
+       return executeHelp(command, output, output_len);
+     case BOT_COMMAND_CMD:
+-      return executeCmd(output, output_len);
++      return executeCmd(command, output, output_len);
+     case BOT_COMMAND_PING:
+       return writeText(output, output_len, "Pong!");
+     case BOT_COMMAND_TEST:
+@@ -642,6 +677,12 @@ BotCommandResult executeCommand(const BotCommand& command, const BotCommandConte
+                             (unsigned long)context.packets_recv_errors, (unsigned)context.queue_depth);
+     case BOT_COMMAND_MAGIC8:
+       return executeMagic8(context, output, output_len);
++    case BOT_COMMAND_SIG:
++      return executeSig(context, output, output_len);
++    case BOT_COMMAND_AIR:
++      return executeAir(context, output, output_len);
++    case BOT_COMMAND_COIN:
++      return executeCoin(context, output, output_len);
+     case BOT_COMMAND_PATH:
+       return executePath(command, context, output, output_len);
+     case BOT_COMMAND_TRACE:
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index a54949d9..b91b291d 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -39,7 +39,7 @@
+ #define BOT_MIN_AUTH_SENDER_KEY_PREFIX_LEN 4
+ #define BOT_KNOWN_BOT_LABEL_LEN 12
+ #define BOT_PREFS_MAGIC 0x31504642UL
+-#define BOT_PREFS_VERSION 6
++#define BOT_PREFS_VERSION 7
+ #define BOT_PREFS_DEFAULT_LOCAL_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_DEFAULT_FLOOD_ADVERT_MILLIS (24UL * 60UL * 60UL * 1000UL)
+ #define BOT_PREFS_INITIAL_LOCAL_ADVERT_MILLIS 60000UL
+@@ -90,8 +90,11 @@ enum BotCommandId : uint8_t {
+   BOT_COMMAND_LORA = 19,
+   BOT_COMMAND_ID = 20,
+   BOT_COMMAND_NEIGHBORS = 21,
+-  BOT_COMMAND_UNSUPPORTED = 22,
+-  BOT_COMMAND_UNKNOWN = 23
++  BOT_COMMAND_SIG = 22,
++  BOT_COMMAND_AIR = 23,
++  BOT_COMMAND_COIN = 24,
++  BOT_COMMAND_UNSUPPORTED = 25,
++  BOT_COMMAND_UNKNOWN = 26
+ };
+ 
+ enum BotCommandVisibility : uint8_t {
+@@ -143,13 +146,17 @@ struct BotCommandMetadata {
+ #define BOT_COMMAND_MASK_LORA (1UL << BOT_COMMAND_LORA)
+ #define BOT_COMMAND_MASK_ID (1UL << BOT_COMMAND_ID)
+ #define BOT_COMMAND_MASK_NEIGHBORS (1UL << BOT_COMMAND_NEIGHBORS)
++#define BOT_COMMAND_MASK_SIG (1UL << BOT_COMMAND_SIG)
++#define BOT_COMMAND_MASK_AIR (1UL << BOT_COMMAND_AIR)
++#define BOT_COMMAND_MASK_COIN (1UL << BOT_COMMAND_COIN)
+ #define BOT_COMMAND_MASK_ALL (BOT_COMMAND_MASK_HELP | BOT_COMMAND_MASK_CMD | BOT_COMMAND_MASK_PING | \
+                               BOT_COMMAND_MASK_TEST | BOT_COMMAND_MASK_HELLO | BOT_COMMAND_MASK_ABOUT | \
+                               BOT_COMMAND_MASK_ROLL | BOT_COMMAND_MASK_DICE | BOT_COMMAND_MASK_STATUS | \
+                               BOT_COMMAND_MASK_CHANNELS | BOT_COMMAND_MASK_VERSION | BOT_COMMAND_MASK_STATS | \
+                               BOT_COMMAND_MASK_MAGIC8 | BOT_COMMAND_MASK_PATH | BOT_COMMAND_MASK_TRACE | \
+                               BOT_COMMAND_MASK_TRACER | BOT_COMMAND_MASK_PREFIX | BOT_COMMAND_MASK_TIME | \
+-                              BOT_COMMAND_MASK_LORA | BOT_COMMAND_MASK_ID | BOT_COMMAND_MASK_NEIGHBORS)
++                              BOT_COMMAND_MASK_LORA | BOT_COMMAND_MASK_ID | BOT_COMMAND_MASK_NEIGHBORS | \
++                              BOT_COMMAND_MASK_SIG | BOT_COMMAND_MASK_AIR | BOT_COMMAND_MASK_COIN)
+ 
+ enum BotCommandResultCode : uint8_t {
+   BOT_COMMAND_RESULT_NOT_HANDLED = 0,
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 5e00c9d2..fc37823c 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -1142,7 +1142,8 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
+   context.pending_responses = bot_stats.pending_responses;
+   context.emergency_forwards = bot_stats.emergency_forwards;
+   context.emergency_forward_failures = bot_stats.emergency_forward_failures;
+-  if (command_id == BOT_COMMAND_ROLL || command_id == BOT_COMMAND_DICE || command_id == BOT_COMMAND_MAGIC8) {
++  if (command_id == BOT_COMMAND_ROLL || command_id == BOT_COMMAND_DICE || command_id == BOT_COMMAND_MAGIC8 ||
++      command_id == BOT_COMMAND_COIN) {
+     getRNG()->random((uint8_t *)&context.random_seed, sizeof(context.random_seed));
+   }
+   if (command_id == BOT_COMMAND_STATUS || command_id == BOT_COMMAND_STATS) {
+@@ -1160,7 +1161,7 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
+     StrHelper::strzcpy(context.firmware_version, FIRMWARE_VERSION, sizeof(context.firmware_version));
+     StrHelper::strzcpy(context.firmware_build_date, FIRMWARE_BUILD_DATE, sizeof(context.firmware_build_date));
+   }
+-  if (command_id == BOT_COMMAND_STATS) {
++  if (command_id == BOT_COMMAND_STATS || command_id == BOT_COMMAND_SIG || command_id == BOT_COMMAND_AIR) {
+     context.queue_depth = (uint8_t)_mgr->getOutboundTotal();
+     context.noise_floor = (int16_t)_radio->getNoiseFloor();
+     context.last_rssi = (int8_t)radio_driver.getLastRSSI();
+@@ -1842,7 +1843,8 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+   if (message.sender_name[0]) {
+     StrHelper::strzcpy(context.response_target, message.sender_name, sizeof(context.response_target));
+   }
+-  if (command.id == BOT_COMMAND_PATH || command.id == BOT_COMMAND_TRACE || command.id == BOT_COMMAND_TRACER) {
++  if (command.id == BOT_COMMAND_PATH || command.id == BOT_COMMAND_TRACE || command.id == BOT_COMMAND_TRACER ||
++      command.id == BOT_COMMAND_SIG) {
+     context.path_len = message.path_len;
+     context.path_hash_size = command.args_len > 0 ? botConfiguredTraceHashSize(_prefs.path_hash_mode) : message.path_hash_size;
+     context.path_hash_count = message.path_hash_count;

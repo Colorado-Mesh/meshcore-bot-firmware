@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 04:12:02 +0000
-Subject: [PATCH 04/14] Align firmware bot commands with upstream behavior
+Subject: [PATCH 04/15] Align firmware bot commands with upstream behavior
 
 ---
  .../companion_radio/BotCommandRegistry.cpp    |  25 +-
@@ -816,10 +816,10 @@ index 38d4416d..9eff340b 100644
  bool isBotAdvertName(const char* name, size_t name_len);
  BotFingerprint fingerprintFor(const BotMessage& message);
 diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
-index 2ee5139b..7b87f14f 100644
+index cb557f5d..e84b3a52 100644
 --- a/examples/companion_radio/MyMesh.cpp
 +++ b/examples/companion_radio/MyMesh.cpp
-@@ -223,7 +223,7 @@ static uint8_t botTraceHashSize(uint8_t flags) {
+@@ -224,7 +224,7 @@ static uint8_t botTraceHashSize(uint8_t flags) {
  
  static bool botTracePathShapeValid(uint8_t path_len, uint8_t flags) {
    uint8_t hash_size = botTraceHashSize(flags);
@@ -828,7 +828,7 @@ index 2ee5139b..7b87f14f 100644
           (path_len % hash_size) == 0 && (path_len / hash_size) <= MAX_PATH_SIZE;
  }
  
-@@ -236,17 +236,42 @@ static void botCopyReversedPath(uint8_t *dest, const uint8_t *src, uint8_t hop_c
+@@ -237,17 +237,42 @@ static void botCopyReversedPath(uint8_t *dest, const uint8_t *src, uint8_t hop_c
  static bool botParseTraceHexPath(const BotCommand &command, uint8_t flags, uint8_t path[BOT_MAX_PATH_BYTES],
                                   uint8_t *path_len) {
    if (!path || !path_len || command.args_len == 0) return false;
@@ -880,7 +880,7 @@ index 2ee5139b..7b87f14f 100644
    *path_len = parsed_len;
    return true;
  }
-@@ -284,7 +309,7 @@ static BotCommandResult botWriteFormatted(char *output, size_t output_len, const
+@@ -285,7 +310,7 @@ static BotCommandResult botWriteFormatted(char *output, size_t output_len, const
  static bool botParsePubKeyPrefixHex(const BotCommand &command, uint8_t prefix[PUB_KEY_SIZE], uint8_t *prefix_len) {
    if (!prefix || !prefix_len || command.args_len == 0 || (command.args_len & 1) != 0) return false;
    size_t byte_len = command.args_len / 2;
@@ -889,7 +889,7 @@ index 2ee5139b..7b87f14f 100644
    for (size_t i = 0; i < byte_len; i++) {
      int high = botHexValue(command.args[i * 2]);
      int low = botHexValue(command.args[i * 2 + 1]);
-@@ -341,14 +366,32 @@ static void botAppendHex(char *output, size_t output_len, size_t *pos, const uin
+@@ -342,14 +367,32 @@ static void botAppendHex(char *output, size_t output_len, size_t *pos, const uin
    if (output_len > 0) output[*pos < output_len ? *pos : output_len - 1] = 0;
  }
  
@@ -929,7 +929,7 @@ index 2ee5139b..7b87f14f 100644
  }
  
  static size_t botFormatTraceResult(char *output, size_t output_len, uint32_t tag, uint8_t flags,
-@@ -358,14 +401,22 @@ static size_t botFormatTraceResult(char *output, size_t output_len, uint32_t tag
+@@ -359,14 +402,22 @@ static size_t botFormatTraceResult(char *output, size_t output_len, uint32_t tag
    uint8_t hop_count = path_len / hash_size;
    char snr[8];
    botFormatQuarters(snr_quarters, snr, sizeof(snr));
@@ -955,7 +955,7 @@ index 2ee5139b..7b87f14f 100644
    return botBoundedStrLen(output, output_len);
  }
  #endif
-@@ -1032,6 +1083,19 @@ void MyMesh::observeBotDirectMessage(const ContactInfo &from, uint32_t sender_ti
+@@ -1041,6 +1092,19 @@ void MyMesh::observeBotDirectMessage(const ContactInfo &from, uint32_t sender_ti
    if (sender_prefix && prefix_len > 0) memcpy(message.sender_key_prefix, sender_prefix, prefix_len);
    message.sender_key_prefix_len = prefix_len;
    message.sender_timestamp = sender_timestamp;
@@ -975,7 +975,7 @@ index 2ee5139b..7b87f14f 100644
    message.text_truncated = FirmwareBot::normalizeText(text, botBoundedStrLen(text, BOT_MAX_TEXT_LEN + 1), message.text,
                                                         sizeof(message.text), &message.text_len) == BOT_WRITE_TRUNCATED;
    recordBotObservation(message, &from, 0xFF);
-@@ -1048,6 +1112,7 @@ void MyMesh::observeBotChannelMessage(uint8_t channel_idx, const char *channel_n
+@@ -1057,6 +1121,7 @@ void MyMesh::observeBotChannelMessage(uint8_t channel_idx, const char *channel_n
      message.channel_name[channel_len] = 0;
    }
    message.sender_timestamp = sender_timestamp;
@@ -983,7 +983,7 @@ index 2ee5139b..7b87f14f 100644
    if (packet && packet->isRouteFlood() && packet->path_len <= 0xFF && mesh::Packet::isValidPathLen((uint8_t)packet->path_len)) {
      message.path_len = (uint8_t)packet->path_len;
      message.path_hash_size = packet->getPathHashSize();
-@@ -1178,7 +1243,7 @@ BotCommandResult MyMesh::executeBotPrefixCommand(const BotCommand &command, char
+@@ -1187,7 +1252,7 @@ BotCommandResult MyMesh::executeBotPrefixCommand(const BotCommand &command, char
    uint8_t prefix[PUB_KEY_SIZE];
    uint8_t prefix_len = 0;
    if (!botParsePubKeyPrefixHex(command, prefix, &prefix_len)) {
@@ -992,7 +992,7 @@ index 2ee5139b..7b87f14f 100644
    }
  
    ContactInfo match;
-@@ -1217,10 +1282,17 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+@@ -1226,10 +1291,17 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
    bool have_path = false;
    if (command.args_len > 0) {
      have_path = botParseTraceHexPath(command, flags, path, &path_len);
@@ -1012,7 +1012,7 @@ index 2ee5139b..7b87f14f 100644
        path_len = raw_len;
        have_path = true;
      }
-@@ -1230,7 +1302,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+@@ -1239,7 +1311,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
  
    BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
    char response[BOT_MAX_RESPONSE_LEN + 1];
@@ -1021,7 +1021,7 @@ index 2ee5139b..7b87f14f 100644
    char final_response[BOT_MAX_RESPONSE_LEN + 1];
    size_t final_response_len = 0;
    if (!botFormatResponseForChannel(message, response, response_len, final_response, sizeof(final_response),
-@@ -1247,7 +1319,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+@@ -1256,7 +1328,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
    uint32_t jitter_seed = request_fingerprint.value ? (uint32_t)request_fingerprint.value : 1;
    uint8_t queue_depth = (uint8_t)_mgr->getOutboundTotal();
    BotCoordinatorScheduleResult schedule = ResponseCoordinator::schedule(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS,
@@ -1030,7 +1030,7 @@ index 2ee5139b..7b87f14f 100644
                                                                          response_fingerprint, now, jitter_seed,
                                                                          bot_identity_seed, queue_depth, bot_prefs.normal_delay_ms,
                                                                          bot_prefs.normal_jitter_ms, &fingerprint,
-@@ -1264,7 +1336,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+@@ -1273,7 +1345,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
  
    bot_stats.eligible_messages++;
    bot_stats.pending_responses++;
@@ -1039,7 +1039,7 @@ index 2ee5139b..7b87f14f 100644
                                       BOT_TRACE_COOLDOWN_MILLIS);
    if (!enqueueBotTrace(message, direct_recipient, channel_idx, path, path_len, flags, fingerprint, response_fingerprint, tag,
                         auth_code)) {
-@@ -1278,7 +1350,7 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+@@ -1287,7 +1359,7 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
                               const uint8_t *path, uint8_t path_len, uint8_t flags,
                               BotFingerprint request_fingerprint, BotFingerprint response_fingerprint, uint32_t tag,
                               uint32_t auth_code) {
@@ -1048,7 +1048,7 @@ index 2ee5139b..7b87f14f 100644
  
    size_t slot = BOT_PENDING_TRACE_SLOTS;
    for (size_t i = 0; i < BOT_PENDING_TRACE_SLOTS; i++) {
-@@ -1308,7 +1380,7 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+@@ -1317,7 +1389,7 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
    pending->auth_code = auth_code;
    pending->flags = flags;
    pending->path_len = path_len;
@@ -1057,7 +1057,7 @@ index 2ee5139b..7b87f14f 100644
    pending->active = true;
    return true;
  }
-@@ -1372,7 +1444,7 @@ bool MyMesh::sendPendingBotTrace(PendingBotTrace &pending, uint32_t now_millis)
+@@ -1381,7 +1453,7 @@ bool MyMesh::sendPendingBotTrace(PendingBotTrace &pending, uint32_t now_millis)
    pending.expires_at_millis = now_millis + BOT_TRACE_TIMEOUT_MILLIS;
  
    char response[BOT_MAX_RESPONSE_LEN + 1];
@@ -1066,7 +1066,7 @@ index 2ee5139b..7b87f14f 100644
    char final_response[BOT_MAX_RESPONSE_LEN + 1];
    size_t final_response_len = 0;
    if (!botFormatResponseForChannelKind(pending.channel_kind, response, response_len, final_response, sizeof(final_response),
-@@ -1387,7 +1459,9 @@ void MyMesh::expirePendingBotTraces(uint32_t now_millis) {
+@@ -1396,7 +1468,9 @@ void MyMesh::expirePendingBotTraces(uint32_t now_millis) {
      PendingBotTrace *pending = &pending_bot_traces[i];
      if (!pending->active || !pending->sent || (int32_t)(now_millis - pending->expires_at_millis) < 0) continue;
  
@@ -1077,7 +1077,7 @@ index 2ee5139b..7b87f14f 100644
      char final_response[BOT_MAX_RESPONSE_LEN + 1];
      size_t final_response_len = 0;
      if (botFormatResponseForChannelKind(pending->channel_kind, response, botBoundedStrLen(response, BOT_MAX_RESPONSE_LEN + 1),
-@@ -1491,19 +1565,43 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+@@ -1500,19 +1574,43 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
  
    char response[BOT_MAX_RESPONSE_LEN + 1];
    BotCommandResult result;
@@ -1127,7 +1127,7 @@ index 2ee5139b..7b87f14f 100644
      bot_stats.parse_errors++;
      return;
 diff --git a/platformio.ini b/platformio.ini
-index dfed7dbd..e3e4b30f 100644
+index e96147b9..e724ad35 100644
 --- a/platformio.ini
 +++ b/platformio.ini
 @@ -57,6 +57,7 @@ build_src_filter =

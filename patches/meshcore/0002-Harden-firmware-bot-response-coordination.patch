@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Fri, 15 May 2026 19:58:42 -0600
-Subject: [PATCH 02/14] Harden firmware bot response coordination
+Subject: [PATCH 02/15] Harden firmware bot response coordination
 
 ---
  examples/companion_radio/BotCommands.cpp      |   2 +-
@@ -153,10 +153,10 @@ index e248adc1..38d4416d 100644
  BotFingerprint responseFingerprintFor(const BotMessage& message, const char* response_text, size_t response_text_len);
  BotCommandId commandIdForName(const char* name, size_t len);
 diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
-index 44fcd1ca..2ee5139b 100644
+index 19963f38..cb557f5d 100644
 --- a/examples/companion_radio/MyMesh.cpp
 +++ b/examples/companion_radio/MyMesh.cpp
-@@ -139,6 +139,18 @@ static void botCopyString(char *dest, size_t dest_len, const char *src) {
+@@ -140,6 +140,18 @@ static void botCopyString(char *dest, size_t dest_len, const char *src) {
    dest[len] = 0;
  }
  
@@ -175,7 +175,7 @@ index 44fcd1ca..2ee5139b 100644
  static bool botParseU32(const char *text, uint32_t *value, const char **end_out) {
    if (!text || !value || !isdigit((unsigned char)text[0])) return false;
    uint32_t parsed = 0;
-@@ -598,6 +610,10 @@ void MyMesh::onContactsFull() {
+@@ -599,6 +611,10 @@ void MyMesh::onContactsFull() {
  }
  
  void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
@@ -186,7 +186,7 @@ index 44fcd1ca..2ee5139b 100644
    if (_serial->isConnected()) {
      if (is_new) {
        writeContactRespFrame(PUSH_CODE_NEW_ADVERT, contact);
-@@ -1040,11 +1056,9 @@ void MyMesh::observeBotChannelMessage(uint8_t channel_idx, const char *channel_n
+@@ -1049,11 +1065,9 @@ void MyMesh::observeBotChannelMessage(uint8_t channel_idx, const char *channel_n
      message.path = packet->path;
    }
  
@@ -201,7 +201,7 @@ index 44fcd1ca..2ee5139b 100644
    recordBotObservation(message, NULL, channel_idx);
  }
  
-@@ -1100,6 +1114,21 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
+@@ -1109,6 +1123,21 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
    }
  }
  
@@ -223,7 +223,7 @@ index 44fcd1ca..2ee5139b 100644
  bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
                                  const char *text, size_t text_len, BotFingerprint request_fingerprint,
                                  BotFingerprint response_fingerprint) {
-@@ -1124,11 +1153,9 @@ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *di
+@@ -1133,11 +1162,9 @@ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *di
    pending->channel_idx = channel_idx;
    pending->request_fingerprint = request_fingerprint;
    pending->response_fingerprint = response_fingerprint;
@@ -238,7 +238,7 @@ index 44fcd1ca..2ee5139b 100644
    pending->active = true;
    return true;
  }
-@@ -1204,7 +1231,14 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+@@ -1213,7 +1240,14 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
    BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
    char response[BOT_MAX_RESPONSE_LEN + 1];
    size_t response_len = botFormatTraceSent(response, sizeof(response));
@@ -254,7 +254,7 @@ index 44fcd1ca..2ee5139b 100644
    BotFingerprint fingerprint;
    uint32_t due_at_millis = 0;
    uint32_t now = _ms->getMillis();
-@@ -1264,6 +1298,10 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+@@ -1273,6 +1307,10 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
      memcpy(pending->recipient_pub_key, direct_recipient->id.pub_key, sizeof(pending->recipient_pub_key));
    }
    pending->channel_idx = channel_idx;
@@ -265,7 +265,7 @@ index 44fcd1ca..2ee5139b 100644
    pending->request_fingerprint = request_fingerprint;
    pending->response_fingerprint = response_fingerprint;
    pending->tag = tag;
-@@ -1275,6 +1313,16 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+@@ -1284,6 +1322,16 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
    return true;
  }
  
@@ -282,7 +282,7 @@ index 44fcd1ca..2ee5139b 100644
  bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text, size_t text_len,
                                BotFingerprint response_fingerprint, uint32_t now_millis) {
    bool success = false;
-@@ -1325,7 +1373,13 @@ bool MyMesh::sendPendingBotTrace(PendingBotTrace &pending, uint32_t now_millis)
+@@ -1334,7 +1382,13 @@ bool MyMesh::sendPendingBotTrace(PendingBotTrace &pending, uint32_t now_millis)
  
    char response[BOT_MAX_RESPONSE_LEN + 1];
    size_t response_len = botFormatTraceSent(response, sizeof(response));
@@ -297,7 +297,7 @@ index 44fcd1ca..2ee5139b 100644
  }
  
  void MyMesh::expirePendingBotTraces(uint32_t now_millis) {
-@@ -1334,10 +1388,13 @@ void MyMesh::expirePendingBotTraces(uint32_t now_millis) {
+@@ -1343,10 +1397,13 @@ void MyMesh::expirePendingBotTraces(uint32_t now_millis) {
      if (!pending->active || !pending->sent || (int32_t)(now_millis - pending->expires_at_millis) < 0) continue;
  
      const char *response = "Trace timed out";
@@ -315,7 +315,7 @@ index 44fcd1ca..2ee5139b 100644
      pending->active = false;
    }
  }
-@@ -1384,6 +1441,18 @@ bool MyMesh::observeKnownBotResponse(const BotMessage &message, bool authoritati
+@@ -1393,6 +1450,18 @@ bool MyMesh::observeKnownBotResponse(const BotMessage &message, bool authoritati
    return false;
  }
  
@@ -334,7 +334,7 @@ index 44fcd1ca..2ee5139b 100644
  void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx) {
    bot_stats.observed_messages++;
    BotPolicyDecision decision = BotPolicy::decide(message.channel_kind);
-@@ -1403,6 +1472,7 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+@@ -1412,6 +1481,7 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
    }
  
    if (observeKnownBotResponse(message, direct_recipient != NULL)) return;
@@ -342,7 +342,7 @@ index 44fcd1ca..2ee5139b 100644
    sendQueuedBotResponses();
  
    BotCommand command;
-@@ -1439,8 +1509,15 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+@@ -1448,8 +1518,15 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
      return;
    }
  
@@ -359,7 +359,7 @@ index 44fcd1ca..2ee5139b 100644
    BotFingerprint fingerprint;
    uint32_t due_at_millis = 0;
    uint32_t bot_identity_seed;
-@@ -1462,7 +1539,7 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+@@ -1471,7 +1548,7 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
    bot_stats.pending_responses++;
    FirmwareBot::recordCommandCooldown(bot_command_cooldowns, BOT_COMMAND_COOLDOWN_SLOTS, command.id, _ms->getMillis(),
                                       BOT_COMMAND_COOLDOWN_MILLIS);
@@ -368,7 +368,7 @@ index 44fcd1ca..2ee5139b 100644
      ResponseCoordinator::cancel(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, fingerprint);
      bot_stats.send_failures++;
    }
-@@ -1572,10 +1649,12 @@ void MyMesh::sendQueuedEmergencyForwards() {
+@@ -1581,10 +1658,12 @@ void MyMesh::sendQueuedEmergencyForwards() {
  
  bool MyMesh::sendBotSelfAdvert(bool flood) {
    mesh::Packet* pkt;
@@ -383,7 +383,7 @@ index 44fcd1ca..2ee5139b 100644
    }
    if (!pkt) return false;
  
-@@ -1927,9 +2006,13 @@ void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code,
+@@ -1936,9 +2015,13 @@ void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code,
      char response[BOT_MAX_RESPONSE_LEN + 1];
      size_t response_len = botFormatTraceResult(response, sizeof(response), tag, flags, path_hashes, path_len,
                                                 (int8_t)(packet->getSNR() * 4));
@@ -401,10 +401,10 @@ index 44fcd1ca..2ee5139b 100644
      break;
    }
 diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
-index 8d848fef..67bdc010 100644
+index c1159a31..1197caff 100644
 --- a/examples/companion_radio/MyMesh.h
 +++ b/examples/companion_radio/MyMesh.h
-@@ -214,7 +214,9 @@ private:
+@@ -217,7 +217,9 @@ private:
                                  uint32_t sender_timestamp, const mesh::Packet *packet);
    void recordBotObservation(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx);
    bool observeKnownBotResponse(const BotMessage &message, bool authoritative_sender);
@@ -414,7 +414,7 @@ index 8d848fef..67bdc010 100644
    bool enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
                            const char *text, size_t text_len, BotFingerprint request_fingerprint,
                            BotFingerprint response_fingerprint);
-@@ -226,6 +228,7 @@ private:
+@@ -229,6 +231,7 @@ private:
                         BotFingerprint response_fingerprint, uint32_t tag, uint32_t auth_code);
    bool sendBotTraceText(const PendingBotTrace &pending, const char *text, size_t text_len,
                          BotFingerprint response_fingerprint, uint32_t now_millis);
@@ -422,7 +422,7 @@ index 8d848fef..67bdc010 100644
    bool sendPendingBotTrace(PendingBotTrace &pending, uint32_t now_millis);
    void expirePendingBotTraces(uint32_t now_millis);
    bool enqueueEmergencyForward(const BotMessage &message);
-@@ -291,8 +294,12 @@ private:
+@@ -295,8 +298,12 @@ private:
      bool active;
      bool direct;
      bool sent;

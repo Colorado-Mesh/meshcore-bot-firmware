@@ -23,19 +23,18 @@ The submodule is a real git repo. Iterate inside it like normal:
 2. **Apply patches** with `bash scripts/apply-patches.sh`. This commits the
    patch queue on top of `origin/main` in the submodule, leaving you with
    a clean tree pinned to a known state.
-3. **Make changes inside `vendor/MeshCore/`** — edit files, run
-   `pio run -e <env>` to compile, commit your changes in the submodule
-   with descriptive messages.
+3. **Edit inside `vendor/MeshCore/`.** Compile with `pio run -e <env>`
+   and commit your changes in the submodule with descriptive messages.
 4. **Re-export the patch queue** with
    `bash scripts/export-patches.sh origin/main`. This deletes
    `patches/meshcore/*.patch` and regenerates it from the submodule
    commits since `origin/main`. Each patch corresponds to one submodule
    commit, so keep commits small and focused.
-5. **Run host tests** (`python3 tests/firmware_bot/run_tests.py`) — fast,
+5. **Run host tests** (`python3 tests/firmware_bot/run_tests.py`). Fast,
    no hardware needed.
-6. **Run safety checks** (`bash scripts/check-bot-safety.sh`) — verifies
-   the firmware doesn't expose private keys, network bridges, or other
-   debug-only features in release builds.
+6. **Run safety checks** (`bash scripts/check-bot-safety.sh`), which
+   verify the firmware doesn't expose private keys, network bridges, or
+   other debug-only features in release builds.
 7. **(Optional) Build representative envs** with
    `bash scripts/build-representative.sh --baseline` to confirm the
    binaries still link and to inspect size impact in `out/size/summary.json`.
@@ -44,14 +43,13 @@ The submodule is a real git repo. Iterate inside it like normal:
 
 ## What goes where
 
-- **Firmware/library code that MUST live inside MeshCore** for PlatformIO
-  builds — develop inside `vendor/MeshCore/`, export as a patch.
-- **Test code (host-side C++ tests)** — `tests/firmware_bot/` at the
-  wrapper level. They `#include` MeshCore headers via the script's `-I`
-  flag.
-- **Tooling, build scripts, CI** — `scripts/` and `.github/` at the
+- Firmware and library code that must live inside MeshCore for PlatformIO
+  builds is developed inside `vendor/MeshCore/` and exported as a patch.
+- Host-side C++ tests live in `tests/firmware_bot/` at the wrapper level.
+  They `#include` MeshCore headers via the script's `-I` flag.
+- Tooling, build scripts, and CI live in `scripts/` and `.github/` at the
   wrapper level.
-- **Colorado-specific docs, fixtures, board notes** — `colorado/`.
+- Colorado-specific docs, fixtures, and board notes live in `colorado/`.
 
 ## Patch hygiene
 
@@ -76,7 +74,8 @@ PRs run `.github/workflows/firmware-build.yml`, which:
 3. Uploads firmware + size reports as workflow artifacts.
 
 Releases run `.github/workflows/release.yml` on `cmesh-bot-v*` tags and
-build all 133 companion USB+BLE environments — see [RELEASE.md](RELEASE.md).
+build every non-excluded companion USB+BLE environment (139 at the current
+pin); see [RELEASE.md](RELEASE.md).
 
 ## Pull request expectations
 

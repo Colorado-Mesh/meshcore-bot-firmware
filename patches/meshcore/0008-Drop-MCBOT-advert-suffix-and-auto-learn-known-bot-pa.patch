@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 19:55:36 -0600
-Subject: [PATCH 08/14] Drop [MCBOT] advert suffix and auto-learn known-bot
+Subject: [PATCH 08/15] Drop [MCBOT] advert suffix and auto-learn known-bot
  path
 
 Removes BOT_ADVERT_MARKER / writeBotAdvertName / isBotAdvertName from
@@ -93,10 +93,10 @@ index 6e5cfd9a..708432a2 100644
  BotFingerprint responseFingerprintFor(const BotMessage& message, const char* response_text, size_t response_text_len);
  uint16_t requestToken(BotFingerprint request_fingerprint);
 diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
-index 02339124..9121d42c 100644
+index d4bca6ce..a8b4680b 100644
 --- a/examples/companion_radio/MyMesh.cpp
 +++ b/examples/companion_radio/MyMesh.cpp
-@@ -637,7 +637,6 @@ void MyMesh::onContactsFull() {
+@@ -638,7 +638,6 @@ void MyMesh::onContactsFull() {
  
  void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
  #if CMESH_BOT_ENABLED
@@ -104,7 +104,7 @@ index 02339124..9121d42c 100644
    if ((path_len & 63) == 0) {
      float rssi = radio_driver.getLastRSSI();
      if (rssi > 32767.0f) rssi = 32767.0f;
-@@ -1167,21 +1166,6 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
+@@ -1176,21 +1175,6 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
    }
  }
  
@@ -126,7 +126,7 @@ index 02339124..9121d42c 100644
  bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
                                  const char *text, size_t text_len, BotFingerprint request_fingerprint,
                                  BotFingerprint response_fingerprint) {
-@@ -2019,12 +2003,10 @@ void MyMesh::sendQueuedEmergencyForwards() {
+@@ -2028,12 +2012,10 @@ void MyMesh::sendQueuedEmergencyForwards() {
  
  bool MyMesh::sendBotSelfAdvert(bool flood) {
    mesh::Packet* pkt;
@@ -141,7 +141,7 @@ index 02339124..9121d42c 100644
    }
    if (!pkt) return false;
  
-@@ -2065,17 +2047,6 @@ void MyMesh::tickBot() {
+@@ -2074,17 +2056,6 @@ void MyMesh::tickBot() {
  }
  #endif
  
@@ -159,7 +159,7 @@ index 02339124..9121d42c 100644
  
  void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
                                    const char *text) {
-@@ -2819,12 +2790,10 @@ void MyMesh::handleCmdFrame(size_t len) {
+@@ -2833,12 +2804,10 @@ void MyMesh::handleCmdFrame(size_t len) {
      }
    } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
      mesh::Packet* pkt;
@@ -174,7 +174,7 @@ index 02339124..9121d42c 100644
      }
      if (pkt) {
        if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
-@@ -2905,12 +2874,10 @@ void MyMesh::handleCmdFrame(size_t len) {
+@@ -2919,12 +2888,10 @@ void MyMesh::handleCmdFrame(size_t len) {
      if (len < 1 + PUB_KEY_SIZE) {
        // export SELF
        mesh::Packet* pkt;
@@ -189,7 +189,7 @@ index 02339124..9121d42c 100644
        }
        if (pkt) {
          pkt->header |= ROUTE_TYPE_FLOOD; // would normally be sent in this mode
-@@ -3791,12 +3758,10 @@ void MyMesh::loop() {
+@@ -3847,12 +3814,10 @@ void MyMesh::loop() {
  
  bool MyMesh::advert() {
    mesh::Packet* pkt;
@@ -205,10 +205,10 @@ index 02339124..9121d42c 100644
    if (pkt) {
      sendZeroHop(pkt);
 diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
-index 711bb69f..46c3ff3c 100644
+index efc5240a..7aa56326 100644
 --- a/examples/companion_radio/MyMesh.h
 +++ b/examples/companion_radio/MyMesh.h
-@@ -216,7 +216,6 @@ private:
+@@ -219,7 +219,6 @@ private:
    bool observeKnownBotResponse(const BotMessage &message, bool authoritative_sender);
    bool observeBotGroupResponse(const BotMessage &message);
    void buildBotCommandContext(BotCommandContext &context, BotCommandId command_id);
@@ -216,7 +216,7 @@ index 711bb69f..46c3ff3c 100644
    bool enqueueBotResponse(const BotMessage &message, const ContactInfo *direct_recipient, uint8_t channel_idx,
                            const char *text, size_t text_len, BotFingerprint request_fingerprint,
                            BotFingerprint response_fingerprint);
-@@ -248,9 +247,6 @@ private:
+@@ -251,9 +250,6 @@ private:
    bool sendBotSelfAdvert(bool flood);
  #endif
  

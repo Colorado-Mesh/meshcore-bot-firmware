@@ -4,7 +4,8 @@ Releases are produced by pushing a `cmesh-bot-vX.Y.Z` tag. The
 `.github/workflows/release.yml` workflow then:
 
 1. Builds **every** companion USB+BLE environment exposed by the pinned
-   MeshCore submodule (133 boards as of this writing).
+   MeshCore submodule, minus the exclusion list in
+   `scripts/list-release-companion-envs.sh` (139 boards at the current pin).
 2. Splits the build across 8 parallel matrix shards for wall-time.
 3. Embeds the tag version (`vX.Y.Z`) into the firmware via
    `FIRMWARE_VERSION`.
@@ -44,9 +45,9 @@ Review it, paste in the CHANGELOG entry as the description, and publish.
 
 ## Tag scheme
 
-- `cmesh-bot-vX.Y.Z` — production release.
-- `cmesh-bot-vX.Y.Z-rc.N` — release candidate (still publishes as draft).
-- `cmesh-bot-vX.Y.Z-alpha.N` / `-beta.N` — pre-release, mark as
+- `cmesh-bot-vX.Y.Z`: production release.
+- `cmesh-bot-vX.Y.Z-rc.N`: release candidate (still publishes as draft).
+- `cmesh-bot-vX.Y.Z-alpha.N` / `-beta.N`: pre-release, mark as
   pre-release when publishing.
 
 The leading `cmesh-bot-` namespace leaves room for future variants
@@ -57,14 +58,14 @@ The leading `cmesh-bot-` namespace leaves room for future variants
 Semantic-ish: bump major for breaking pref/protocol changes, minor for
 new commands or boards, patch for fixes. Bump `BOT_PREFS_VERSION` in
 `vendor/MeshCore/examples/companion_radio/BotTypes.h` whenever an
-existing pref field's meaning or default changes — that forces deployed
+existing pref field's meaning or default changes. That forces deployed
 bots to reset prefs on first boot.
 
 ## Hotfix / unpublish
 
 If a published release turns out to be broken:
 
-1. Mark it as a pre-release (don't delete — flashed devices may still
+1. Mark it as a pre-release (don't delete it; flashed devices may still
    reference the URL).
 2. Tag and publish `cmesh-bot-vX.Y.(Z+1)` immediately.
 3. Edit the broken release's notes to point at the fix.
@@ -77,5 +78,5 @@ git push --delete origin cmesh-bot-vX.Y.Z
 # fix, re-tag, re-push
 ```
 
-Avoid deleting tags after the workflow has published artifacts — users
-may have already downloaded them.
+Avoid deleting tags after the workflow has published artifacts, since
+users may have already downloaded them.

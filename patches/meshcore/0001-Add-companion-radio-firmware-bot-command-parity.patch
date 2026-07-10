@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Fri, 15 May 2026 11:44:21 -0600
-Subject: [PATCH 01/14] Add companion radio firmware bot command parity
+Subject: [PATCH 01/15] Add companion radio firmware bot command parity
 
 ---
  .../companion_radio/BotCommandRegistry.cpp    |  121 ++
@@ -1428,7 +1428,7 @@ index 00000000..5c7430a9
 +static_assert(sizeof(BotPrefs) <= 320, "BotPrefs RAM budget exceeded");
 +static_assert(sizeof(BotStats) <= 64, "BotStats RAM budget exceeded");
 diff --git a/examples/companion_radio/DataStore.cpp b/examples/companion_radio/DataStore.cpp
-index c7988bb3..9a134389 100644
+index bf2f36c3..e6f52e09 100644
 --- a/examples/companion_radio/DataStore.cpp
 +++ b/examples/companion_radio/DataStore.cpp
 @@ -1,6 +1,10 @@
@@ -1482,7 +1482,7 @@ index c7988bb3..9a134389 100644
    File file = openRead(_fs, filename);
    if (file) {
 diff --git a/examples/companion_radio/DataStore.h b/examples/companion_radio/DataStore.h
-index 58b4d5d2..187cd771 100644
+index af5ee7af..702316cf 100644
 --- a/examples/companion_radio/DataStore.h
 +++ b/examples/companion_radio/DataStore.h
 @@ -5,6 +5,13 @@
@@ -1508,7 +1508,7 @@ index 58b4d5d2..187cd771 100644
 +  bool saveBotPrefs(const BotPrefs& prefs);
 +#endif
    void loadContacts(DataStoreHost* host);
-   void saveContacts(DataStoreHost* host);
+   void saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c) = NULL);
    void loadChannels(DataStoreHost* host);
 diff --git a/examples/companion_radio/EmergencyForwarder.cpp b/examples/companion_radio/EmergencyForwarder.cpp
 new file mode 100644
@@ -2072,7 +2072,7 @@ index 00000000..5e93dad0
 +
 +}
 diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
-index e8c1914b..44fcd1ca 100644
+index 6fbb0f74..19963f38 100644
 --- a/examples/companion_radio/MyMesh.cpp
 +++ b/examples/companion_radio/MyMesh.cpp
 @@ -2,6 +2,21 @@
@@ -2097,7 +2097,7 @@ index e8c1914b..44fcd1ca 100644
  
  #define CMD_APP_START                 1
  #define CMD_SEND_TXT_MSG              2
-@@ -105,8 +120,244 @@
+@@ -106,8 +121,244 @@
  #define DIRECT_SEND_PERHOP_EXTRA_MILLIS 250
  #define LAZY_CONTACTS_WRITE_DELAY       5000
  
@@ -2342,7 +2342,7 @@ index e8c1914b..44fcd1ca 100644
  // these are _pushed_ to client app at any time
  #define PUSH_CODE_ADVERT                0x80
  #define PUSH_CODE_PATH_UPDATED          0x81
-@@ -514,6 +765,9 @@ void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t
+@@ -523,6 +774,9 @@ void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t
                             const char *text) {
    markConnectionActive(from); // in case this is from a server, and we have a connection
    queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
@@ -2352,7 +2352,7 @@ index e8c1914b..44fcd1ca 100644
  }
  
  void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
-@@ -528,8 +782,840 @@ void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uin
+@@ -537,8 +791,840 @@ void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uin
    // from.sync_since change needs to be persisted
    dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
    queueMessage(from, TXT_TYPE_SIGNED_PLAIN, pkt, sender_timestamp, sender_prefix, 4, text);
@@ -2399,8 +2399,8 @@ index e8c1914b..44fcd1ca 100644
 +                (unsigned)bot_prefs.normal_jitter_ms);
 +  Serial.printf("  > advert local=%lu flood=%lu\n", (unsigned long)bot_prefs.local_advert_interval_ms,
 +                (unsigned long)bot_prefs.flood_advert_interval_ms);
-+}
-+
+ }
+ 
 +bool MyMesh::handleBotCLI(const char *args) {
 +  if (!args) return false;
 +  botSkipSpaces(&args);
@@ -2705,8 +2705,8 @@ index e8c1914b..44fcd1ca 100644
 +  pending->text[pending->text_len] = 0;
 +  pending->active = true;
 +  return true;
- }
- 
++}
++
 +bool MyMesh::findBotChannel(BotChannelKind kind, uint8_t &channel_idx) {
 +  for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
 +    ChannelDetails channel;
@@ -3193,7 +3193,7 @@ index e8c1914b..44fcd1ca 100644
  void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
                                    const char *text) {
    int i = 0;
-@@ -566,15 +1652,17 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
+@@ -575,15 +1661,17 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
      if (_ui) _ui->notify(UIEventType::channelMessage);
  #endif
    }
@@ -3213,7 +3213,7 @@ index e8c1914b..44fcd1ca 100644
  }
  
  void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint16_t data_type,
-@@ -829,6 +1917,23 @@ void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code,
+@@ -838,6 +1926,23 @@ void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code,
    } else {
      MESH_DEBUG_PRINTLN("onTraceRecv(), data received while app offline");
    }
@@ -3237,10 +3237,10 @@ index e8c1914b..44fcd1ca 100644
  }
  
  uint32_t MyMesh::calcFloodTimeoutMillisFor(uint32_t pkt_airtime_millis) const {
-@@ -856,6 +1961,19 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
-   dirty_contacts_expiry = 0;
+@@ -866,6 +1971,19 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
    memset(advert_paths, 0, sizeof(advert_paths));
    memset(send_scope.key, 0, sizeof(send_scope.key));
+   send_unscoped = false;
 +#if CMESH_BOT_ENABLED
 +  BotPrefsCodec::defaults(bot_prefs);
 +  memset(&bot_stats, 0, sizeof(bot_stats));
@@ -3257,7 +3257,7 @@ index e8c1914b..44fcd1ca 100644
  
    // defaults
    memset(&_prefs, 0, sizeof(_prefs));
-@@ -868,6 +1986,9 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
+@@ -878,6 +1996,9 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
    _prefs.tx_power_dbm = LORA_TX_POWER;
    _prefs.gps_enabled = 0;       // GPS disabled by default
    _prefs.gps_interval = 0;      // No automatic GPS updates by default
@@ -3267,7 +3267,7 @@ index e8c1914b..44fcd1ca 100644
    //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
  #if defined(USE_SX1262) || defined(USE_SX1268)
  #ifdef SX126X_RX_BOOSTED_GAIN
-@@ -956,6 +2077,11 @@ void MyMesh::begin(bool has_display) {
+@@ -966,6 +2087,11 @@ void MyMesh::begin(bool has_display) {
    radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
    MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                       radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
@@ -3279,7 +3279,7 @@ index e8c1914b..44fcd1ca 100644
  }
  
  const char *MyMesh::getNodeName() {
-@@ -1975,7 +3101,13 @@ void MyMesh::checkCLIRescueCmd() {
+@@ -2023,7 +3149,13 @@ void MyMesh::checkCLIRescueCmd() {
    if (len > 0 && cli_command[len - 1] == '\r') {  // received complete line
      cli_command[len - 1] = 0;  // replace newline with C string null terminator
  
@@ -3294,7 +3294,7 @@ index e8c1914b..44fcd1ca 100644
        const char* config = &cli_command[4];
        if (memcmp(config, "pin ", 4) == 0) {
          _prefs.ble_pin = atoi(&config[4]);
-@@ -2172,6 +3304,10 @@ void MyMesh::loop() {
+@@ -2228,6 +3360,10 @@ void MyMesh::loop() {
      dirty_contacts_expiry = 0;
    }
  
@@ -3306,7 +3306,7 @@ index e8c1914b..44fcd1ca 100644
    if (_ui) _ui->setHasConnection(_serial->isConnected());
  #endif
 diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
-index aeff591c..8d848fef 100644
+index 43d3950b..c1159a31 100644
 --- a/examples/companion_radio/MyMesh.h
 +++ b/examples/companion_radio/MyMesh.h
 @@ -4,6 +4,15 @@
@@ -3323,9 +3323,9 @@ index aeff591c..8d848fef 100644
 +#endif
 +
  /*------------ Frame Protocol --------------*/
- #define FIRMWARE_VER_CODE 11
+ #define FIRMWARE_VER_CODE 13
  
-@@ -192,6 +201,43 @@ private:
+@@ -195,6 +204,43 @@ private:
      return _store->putBlobByKey(key, key_len, src_buf, len);
    }
  
@@ -3369,7 +3369,7 @@ index aeff591c..8d848fef 100644
    void checkCLIRescueCmd();
    void checkSerialInterface();
    bool isValidClientRepeatFreq(uint32_t f) const;
-@@ -223,6 +269,53 @@ private:
+@@ -227,6 +273,53 @@ private:
  
    TransportKey send_scope;
  
@@ -3679,7 +3679,7 @@ index 00000000..7717bee7
 +
 +}
 diff --git a/platformio.ini b/platformio.ini
-index 864e5e1f..dfed7dbd 100644
+index e16f7b83..e96147b9 100644
 --- a/platformio.ini
 +++ b/platformio.ini
 @@ -54,6 +54,14 @@ build_src_filter =
@@ -3698,7 +3698,7 @@ index 864e5e1f..dfed7dbd 100644
  extends = arduino_base
  platform = platformio/espressif32@6.11.0
 diff --git a/variants/heltec_v3/platformio.ini b/variants/heltec_v3/platformio.ini
-index 803ee683..ca9cf00d 100644
+index a70a93a5..8164bc78 100644
 --- a/variants/heltec_v3/platformio.ini
 +++ b/variants/heltec_v3/platformio.ini
 @@ -144,6 +144,7 @@ build_flags =
@@ -3718,10 +3718,10 @@ index 803ee683..ca9cf00d 100644
    -D AUTO_SHUTDOWN_MILLIVOLTS=3400
    -D BLE_DEBUG_LOGGING=1
 diff --git a/variants/rak4631/platformio.ini b/variants/rak4631/platformio.ini
-index ea7e49c3..d6610098 100644
+index 2bbba314..a1226fe3 100644
 --- a/variants/rak4631/platformio.ini
 +++ b/variants/rak4631/platformio.ini
-@@ -122,6 +122,7 @@ build_flags =
+@@ -127,6 +127,7 @@ build_flags =
    -D DISPLAY_CLASS=SSD1306Display
    -D MAX_CONTACTS=350
    -D MAX_GROUP_CHANNELS=40
@@ -3729,7 +3729,7 @@ index ea7e49c3..d6610098 100644
  ; NOTE: DO NOT ENABLE -->  -D MESH_PACKET_LOGGING=1
  ; NOTE: DO NOT ENABLE -->  -D MESH_DEBUG=1
  build_src_filter = ${rak4631.build_src_filter}
-@@ -143,6 +144,7 @@ build_flags =
+@@ -148,6 +149,7 @@ build_flags =
    -D DISPLAY_CLASS=SSD1306Display
    -D MAX_CONTACTS=350
    -D MAX_GROUP_CHANNELS=40

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 20:31:12 -0600
-Subject: [PATCH 10/14] Widen coordinator delays a tiny bit more
+Subject: [PATCH 10/15] Widen coordinator delays a tiny bit more
 
 ~25% bump across the main coordination knobs:
 - BOT_RESPONSE_DELAY_BASE_MILLIS   1200 -> 1500
