@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Sat, 16 May 2026 18:58:28 -0600
-Subject: [PATCH 06/15] Mark bot adverts, speed up initial advert, default
+Subject: [PATCH 06/18] Mark bot adverts, speed up initial advert, default
  contacts auto-overwrite
 
 Three coordination/discoverability fixes:
@@ -42,10 +42,10 @@ index 4fdd4bdd..d30fb7f2 100644
  #define BOT_PREFS_MAX_ADVERT_MILLIS (7UL * 24UL * 60UL * 60UL * 1000UL)
  #define BOT_PREFS_SERIALIZED_SIZE 296
 diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
-index 27ff37c1..b2c47df4 100644
+index 1689c946..ac198336 100644
 --- a/examples/companion_radio/MyMesh.cpp
 +++ b/examples/companion_radio/MyMesh.cpp
-@@ -857,7 +857,7 @@ void MyMesh::applyBotPrefs() {
+@@ -860,7 +860,7 @@ void MyMesh::applyBotPrefs() {
    }
    if (bot_prefs.enabled) {
      scheduleBotLocalAdvert(bot_prefs.local_advert_interval_ms ? BOT_PREFS_INITIAL_LOCAL_ADVERT_MILLIS : 0);
@@ -54,7 +54,7 @@ index 27ff37c1..b2c47df4 100644
    } else {
      scheduleBotLocalAdvert(0);
      scheduleBotFloodAdvert(0);
-@@ -2005,11 +2005,11 @@ void MyMesh::sendQueuedEmergencyForwards() {
+@@ -2008,11 +2008,11 @@ void MyMesh::sendQueuedEmergencyForwards() {
  bool MyMesh::sendBotSelfAdvert(bool flood) {
    mesh::Packet* pkt;
    char bot_advert_name[sizeof(((ContactInfo*)0)->name)];
@@ -69,7 +69,7 @@ index 27ff37c1..b2c47df4 100644
    }
    if (!pkt) return false;
  
-@@ -2050,6 +2050,18 @@ void MyMesh::tickBot() {
+@@ -2053,6 +2053,18 @@ void MyMesh::tickBot() {
  }
  #endif
  
@@ -88,7 +88,7 @@ index 27ff37c1..b2c47df4 100644
  void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
                                    const char *text) {
    int i = 0;
-@@ -2489,6 +2501,9 @@ void MyMesh::begin(bool has_display) {
+@@ -2501,6 +2513,9 @@ void MyMesh::begin(bool has_display) {
    _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
    _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
    _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
@@ -98,7 +98,7 @@ index 27ff37c1..b2c47df4 100644
  
  #ifdef BLE_PIN_CODE // 123456 by default
    if (_prefs.ble_pin == 0) {
-@@ -2794,10 +2809,12 @@ void MyMesh::handleCmdFrame(size_t len) {
+@@ -2808,10 +2823,12 @@ void MyMesh::handleCmdFrame(size_t len) {
      }
    } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
      mesh::Packet* pkt;
@@ -113,7 +113,7 @@ index 27ff37c1..b2c47df4 100644
      }
      if (pkt) {
        if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
-@@ -2878,10 +2895,12 @@ void MyMesh::handleCmdFrame(size_t len) {
+@@ -2892,10 +2909,12 @@ void MyMesh::handleCmdFrame(size_t len) {
      if (len < 1 + PUB_KEY_SIZE) {
        // export SELF
        mesh::Packet* pkt;
@@ -128,7 +128,7 @@ index 27ff37c1..b2c47df4 100644
        }
        if (pkt) {
          pkt->header |= ROUTE_TYPE_FLOOD; // would normally be sent in this mode
-@@ -3804,10 +3823,12 @@ void MyMesh::loop() {
+@@ -3817,10 +3836,12 @@ void MyMesh::loop() {
  
  bool MyMesh::advert() {
    mesh::Packet* pkt;
@@ -144,10 +144,10 @@ index 27ff37c1..b2c47df4 100644
    if (pkt) {
      sendZeroHop(pkt);
 diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
-index 488987c0..efc5240a 100644
+index 1e3cefce..be6fbbe2 100644
 --- a/examples/companion_radio/MyMesh.h
 +++ b/examples/companion_radio/MyMesh.h
-@@ -251,6 +251,9 @@ private:
+@@ -256,6 +256,9 @@ private:
    bool sendBotSelfAdvert(bool flood);
  #endif
  

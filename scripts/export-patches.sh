@@ -31,4 +31,4 @@ mkdir -p "${PATCH_DIR}"
 rm -f "${PATCH_DIR}"/*.patch
 git -C "${MESHCORE_DIR}" format-patch --zero-commit --no-signature --output-directory "${PATCH_DIR}" "${base_ref}..HEAD" >/dev/null
 
-echo "Exported ${commit_count} MeshCore patch(es) to ${PATCH_DIR#${MESHCORE_FW_ROOT}/}"
+echo "Exported ${commit_count} MeshCore patch(es) to ${PATCH_DIR#"${MESHCORE_FW_ROOT}"/}"

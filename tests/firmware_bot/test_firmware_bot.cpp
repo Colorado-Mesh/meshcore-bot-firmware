@@ -220,6 +220,8 @@ static void test_bot_prefs_validation_and_command_mask() {
   BotPrefsCodec::defaults(duplicate_channels);
   strncpy(duplicate_channels.testing_channel, "#bot", sizeof(duplicate_channels.testing_channel) - 1);
   assert(!BotPrefsCodec::channelConfigValid(duplicate_channels));
+  strncpy(duplicate_channels.testing_channel, "#BOT", sizeof(duplicate_channels.testing_channel) - 1);
+  assert(!BotPrefsCodec::channelConfigValid(duplicate_channels));
   BotPrefsCodec::validate(duplicate_channels);
   assert(strcmp(duplicate_channels.testing_channel, "#testing") == 0);
 
@@ -1753,13 +1755,47 @@ static void test_response_coordinator_request_token_suppression() {
                                        0x01020304UL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
   assert(ResponseCoordinator::schedule(pending, 2, second, BOT_COMMAND_TEST, second_request, second_response, 1000, 0,
                                        0x01020304UL, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
-  assert(ResponseCoordinator::suppressByRequestToken(pending, 2, FirmwareBot::requestToken(first_request)));
+  assert(ResponseCoordinator::suppressByRequestToken(pending, 2, FirmwareBot::requestToken(first_request), BOT_CHANNEL_BOT));
   BotCoordinatorReady ready = ResponseCoordinator::poll(pending, 2, 1000);
   assert(ready.result == BOT_COORDINATOR_READY_SUPPRESSED);
   assert(ready.request_fingerprint.value == first_request.value);
   ready = ResponseCoordinator::poll(pending, 2, due);
   assert(ready.result == BOT_COORDINATOR_READY_SEND);
   assert(ready.request_fingerprint.value == second_request.value);
+}
+
+static void test_response_coordinator_token_channel_isolation() {
+  BotCoordinatorPending pending[3];
+  ResponseCoordinator::clear(pending, 3);
+  BotMessage bot = make_message("#bot", "ping");
+  BotMessage testing = make_message("#testing", "ping");
+  BotMessage dm = make_message("", "ping");
+  dm.channel_kind = BOT_CHANNEL_DM;
+  BotFingerprint requests[] = {{0x11234}, {0x21234}, {0x31234}};
+  BotFingerprint response = {0x5678};
+  BotFingerprint scheduled;
+  uint32_t due;
+  const BotMessage messages[] = {bot, testing, dm};
+  for (size_t i = 0; i < 3; i++) {
+    assert(ResponseCoordinator::schedule(pending, 3, messages[i], BOT_COMMAND_PING, requests[i], response,
+                                         1000, 0, 0, 0, &scheduled, &due) == BOT_COORDINATOR_SCHEDULED);
+  }
+  assert(!ResponseCoordinator::suppressByRequestToken(pending, 3, 0x1234, BOT_CHANNEL_DM));
+  assert(ResponseCoordinator::suppressByRequestToken(pending, 3, 0x1234, BOT_CHANNEL_BOT));
+  assert(pending[0].suppressed);
+  assert(!pending[1].suppressed);
+  assert(!pending[2].suppressed);
+
+  BotCoordinatorRecent recent[3];
+  ResponseCoordinator::clearRecent(recent, 3);
+  ResponseCoordinator::recordRequestToken(recent, 3, 0x1234, BOT_CHANNEL_BOT, 1000);
+  assert(ResponseCoordinator::recentlyAnswered(recent, 3, 0x1234, BOT_CHANNEL_BOT, 1000));
+  assert(!ResponseCoordinator::recentlyAnswered(recent, 3, 0x1234, BOT_CHANNEL_TESTING, 1000));
+  assert(!ResponseCoordinator::recentlyAnswered(recent, 3, 0x1234, BOT_CHANNEL_DM, 1000));
+  ResponseCoordinator::recordRequestToken(recent, 3, 0x1234, BOT_CHANNEL_TESTING, 2000);
+  assert(ResponseCoordinator::recentlyAnswered(recent, 3, 0x1234, BOT_CHANNEL_BOT, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS - 1));
+  assert(!ResponseCoordinator::recentlyAnswered(recent, 3, 0x1234, BOT_CHANNEL_BOT, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS));
+  assert(ResponseCoordinator::recentlyAnswered(recent, 3, 0x1234, BOT_CHANNEL_TESTING, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS));
 }
 
 static void test_response_coordinator_recent_responses() {
@@ -1776,17 +1812,17 @@ static void test_response_coordinator_recent_responses() {
   assert(ResponseCoordinator::recentlySent(recent, 1, response, 1000));
   assert(ResponseCoordinator::recentlySent(recent, 1, response, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS - 1));
 
-  ResponseCoordinator::recordRequestToken(recent, 1, 0x1234, 1000 + 10);
-  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, 1000 + 10));
+  ResponseCoordinator::recordRequestToken(recent, 1, 0x1234, BOT_CHANNEL_BOT, 1000 + 10);
+  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, BOT_CHANNEL_BOT, 1000 + 10));
   assert(ResponseCoordinator::recentlySent(recent, 1, response, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS - 1));
   assert(!ResponseCoordinator::recentlySent(recent, 1, response, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS));
-  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS));
-  assert(!ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, 1000 + 10 + BOT_RESPONSE_RECENT_TTL_MILLIS));
+  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, BOT_CHANNEL_BOT, 1000 + BOT_RESPONSE_RECENT_TTL_MILLIS));
+  assert(!ResponseCoordinator::recentlyAnswered(recent, 1, 0x1234, BOT_CHANNEL_BOT, 1000 + 10 + BOT_RESPONSE_RECENT_TTL_MILLIS));
 
-  ResponseCoordinator::recordRequestToken(recent, 1, 0x5678, 2000);
-  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x5678, 2000));
+  ResponseCoordinator::recordRequestToken(recent, 1, 0x5678, BOT_CHANNEL_BOT, 2000);
+  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x5678, BOT_CHANNEL_BOT, 2000));
   ResponseCoordinator::recordRecent(recent, 1, other_response, 2000 + 1);
-  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x5678, 2000 + 1));
+  assert(ResponseCoordinator::recentlyAnswered(recent, 1, 0x5678, BOT_CHANNEL_BOT, 2000 + 1));
   assert(ResponseCoordinator::recentlySent(recent, 1, other_response, 2000 + 1));
 }
 
@@ -1858,6 +1894,7 @@ int main() {
   test_response_coordinator_group_observed_response_suppresses();
   test_response_coordinator_group_guarded_path_output_suppresses();
   test_response_coordinator_request_token_suppression();
+  test_response_coordinator_token_channel_isolation();
   test_response_coordinator_suppress_expire_full();
   test_response_coordinator_cancel_by_request();
   test_response_coordinator_delay_biases();

@@ -35,12 +35,15 @@ of a pinned MeshCore commit. The patches add:
 See `patches/meshcore/` for the full set; each patch is a standalone commit
 re-exported from the submodule.
 
+The upstream base is MeshCore **1.17.1**, pinned to `d9296435`; local
+changes are reproduced from the ordered patch queue.
+
 ## Supported boards
 
 The release workflow builds **every** `*_companion_radio_usb` and
 `*_companion_radio_ble` PlatformIO environment exposed by upstream MeshCore,
 minus a short exclusion list of BLE variants that don't fit flash (see
-`scripts/list-release-companion-envs.sh`). That is 139 boards at the current
+`scripts/list-release-companion-envs.sh`). That is 153 USB/BLE firmware environments at the current
 pin, across ESP32, NRF52, RP2040, and STM32 platforms (Heltec V3, RAK 4631,
 LilyGo T-Echo, T-Beam, T-Deck, Xiao S3, Nano G2, ThinkNode, Meshtiny, Pico W,
 and many more). See the
@@ -85,8 +88,11 @@ use `adafruit-nrfutil dfu serial -pkg <board>.zip -p <port>`.
 
 ## Using the bot
 
-Once flashed, the bot joins the channels configured in its prefs. By default
-those are `#bot`, `#testing`, `#emergency`, and `Public`. Send commands on
+Provision `#bot`, `#testing`, and `#emergency` with your companion app before
+using their commands or forwarding. Firmware creates `Public` on startup;
+bot preferences define channel policy names and do not create channel keys
+or membership. The default policy names are `#bot`, `#testing`,
+`#emergency`, and `Public`. Send commands on
 `#bot` (or DM the bot directly) without any prefix, for example:
 
 | Command | Response |
@@ -105,11 +111,13 @@ those are `#bot`, `#testing`, `#emergency`, and `Public`. Send commands on
 | `help` | List chat commands (`cmd diag` lists the diagnostic set) |
 
 In any other channel the bot stays silent (except `#emergency`, which it
-re-forwards to `Public`).
+re-forwards to `Public`). Emergency forwarding stays active when ordinary
+bot commands and adverts are disabled.
 
 If you're testing alongside other Colorado bots, the response coordinator
-adds a hop-aware delay (~1.5 s per hop, capped at 8 s) so the closest bot
-wins the race and others suppress. This avoids spam on the channel.
+adds a hop-aware delay with quadratic growth (hop bias capped at 50 s,
+plus base delay and jitter) so the closest bot wins the race and others
+suppress. Response tokens are scoped to their source channel. This avoids spam on the channel.
 
 ## Layout
 
@@ -136,7 +144,7 @@ Make firmware changes inside `vendor/MeshCore`, commit them in the submodule
 worktree, then export the patch queue:
 
 ```sh
-bash scripts/export-patches.sh origin/main
+bash scripts/export-patches.sh d9296435
 ```
 
 Build the four representative companion environments and write size reports:

@@ -7,12 +7,16 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  DISABLE_DEBUG: 1
 
 jobs:
   representative-build:
@@ -21,12 +25,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
 
       - name: Cache PlatformIO
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.cache/pip
@@ -36,15 +40,18 @@ jobs:
             ${{ runner.os }}-pio-
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.11'
 
       - name: Install PlatformIO
-        run: python3 -m pip install --upgrade platformio
+        run: python3 -m pip install platformio==6.2.0
 
       - name: Apply MeshCore patches
         run: bash scripts/apply-patches.sh
+
+      - name: Check effective production flags
+        run: python3 scripts/check-companion-flags.py
 
       - name: Run host tests and safety checks
         run: MESHCORE_SKIP_APPLY_PATCHES=1 bash scripts/verify.sh --no-build
@@ -55,15 +62,18 @@ jobs:
           SIZE_REPORT=out/size/report.txt \
           bash scripts/build-representative.sh --baseline
 
+      - name: Run packet bounds regressions with sanitizers
+        run: python3 tests/packet_safety/run_tests.py --crypto-dir vendor/MeshCore/.pio/libdeps/Heltec_v3_companion_radio_usb/Crypto
+
       - name: Upload size reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: representative-size-reports
           path: out/size
 
       - name: Upload firmware artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: representative-firmware

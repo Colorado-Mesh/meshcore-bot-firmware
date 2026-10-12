@@ -24,7 +24,7 @@ if [ "${#patches[@]}" -eq 0 ]; then
 fi
 
 for patch in "${patches[@]}"; do
-  echo "Applying ${patch#${MESHCORE_FW_ROOT}/}"
+  echo "Applying ${patch#"${MESHCORE_FW_ROOT}"/}"
   git -C "${MESHCORE_DIR}" apply --index "$patch"
 done
 

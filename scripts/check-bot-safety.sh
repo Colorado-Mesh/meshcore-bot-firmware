@@ -26,7 +26,7 @@ bot_sources=(
 missing=0
 for file in "${bot_sources[@]}"; do
   if [ ! -f "$file" ]; then
-    echo "Missing bot source: ${file#${MESHCORE_FW_ROOT}/}" >&2
+    echo "Missing bot source: ${file#"${MESHCORE_FW_ROOT}"/}" >&2
     missing=1
   fi
 done

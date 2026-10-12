@@ -6,6 +6,38 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
 
 ## [Unreleased]
 
+## [cmesh-bot-v0.2.0] - 2026-10-12
+
+### Changed
+
+- Updated the MeshCore backend from 1.16.0 (`bbb58cce`) to the stable
+  companion 1.17.1 release (`d9296435`), preserving bot preferences and
+  adapting the patch queue to the new preference storage and USB/routing APIs.
+- Release coverage increased to 153 companion USB/BLE environments.
+- Updated GitHub Actions and pinned PlatformIO 6.2.0; disabled debug logging
+  while retaining the NRF52 framework's required `CFG_DEBUG` definition.
+
+### Fixed
+
+- Scoped bot response coordination to its source channel and isolated direct
+  messages from group response tokens.
+- Validated encrypted packet lengths, returned path bounds, and companion
+  response frame sizes before processing; rejected unsolicited zero-tag responses.
+- Rejected overlapping channel roles that differ only by case.
+- Production flag injection now honors customized MeshCore checkout paths,
+  with effective bot/private-key flags checked for every companion environment.
+- Release builds now fail on missing or empty target artifacts and generate
+  a manifest and SHA-256 checksums before creating the draft release.
+- Corrected channel provisioning, response delay, and patch development docs.
+
+### Validation
+
+- Host bot regressions include channel isolation and overlapping channel roles.
+- Native packet regressions use the real Crypto library and production response
+  handler under AddressSanitizer and UndefinedBehaviorSanitizer.
+- Hardware flashing, over-the-air behavior, and bootloader policies require
+  device verification; source/host/build validation does not cover those checks.
+
 ## [cmesh-bot-v0.1.0] - 2026-07-10
 
 First tagged release.

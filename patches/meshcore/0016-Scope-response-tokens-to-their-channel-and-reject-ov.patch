@@ -1,0 +1,257 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Mon, 12 Oct 2026 13:02:58 -0600
+Subject: [PATCH 16/18] Scope response tokens to their channel and reject
+ overlapping channel roles
+
+---
+ examples/companion_radio/BotPrefs.cpp         |  6 +++++-
+ examples/companion_radio/BotTypes.h           |  2 ++
+ examples/companion_radio/MyMesh.cpp           | 19 +++++++++---------
+ examples/companion_radio/MyMesh.h             |  1 +
+ .../companion_radio/ResponseCoordinator.cpp   | 20 ++++++++++---------
+ .../companion_radio/ResponseCoordinator.h     |  6 +++---
+ 6 files changed, 32 insertions(+), 22 deletions(-)
+
+diff --git a/examples/companion_radio/BotPrefs.cpp b/examples/companion_radio/BotPrefs.cpp
+index 6c7d553f..782eaa19 100644
+--- a/examples/companion_radio/BotPrefs.cpp
++++ b/examples/companion_radio/BotPrefs.cpp
+@@ -3,6 +3,7 @@
+ #include "BotCommandRegistry.h"
+ 
+ #include <string.h>
++#include <ctype.h>
+ 
+ namespace {
+ 
+@@ -25,7 +26,10 @@ bool channelNameEqual(const char* lhs, const char* rhs) {
+   size_t lhs_len = boundedStrLen(lhs, BOT_MAX_CHANNEL_NAME_LEN + 1);
+   size_t rhs_len = boundedStrLen(rhs, BOT_MAX_CHANNEL_NAME_LEN + 1);
+   if (lhs_len != rhs_len || lhs_len == 0) return false;
+-  return memcmp(lhs, rhs, lhs_len) == 0;
++  for (size_t i = 0; i < lhs_len; i++) {
++    if (tolower((unsigned char)lhs[i]) != tolower((unsigned char)rhs[i])) return false;
++  }
++  return true;
+ }
+ 
+ bool channelHasShape(const char* value, bool public_channel) {
+diff --git a/examples/companion_radio/BotTypes.h b/examples/companion_radio/BotTypes.h
+index b91b291d..738b2252 100644
+--- a/examples/companion_radio/BotTypes.h
++++ b/examples/companion_radio/BotTypes.h
+@@ -294,6 +294,7 @@ struct BotNeighbor {
+ struct BotCoordinatorPending {
+   bool active;
+   bool suppressed;
++  uint8_t channel_kind;
+   BotFingerprint request_fingerprint;
+   BotFingerprint response_fingerprint;
+   uint32_t due_at_millis;
+@@ -305,6 +306,7 @@ struct BotCoordinatorRecent {
+   uint32_t response_expires_at_millis;
+   uint32_t request_expires_at_millis;
+   uint16_t request_token;
++  uint8_t channel_kind;
+   bool active;
+   bool request_active;
+ };
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 4c36c59e..b5b25268 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -1196,6 +1196,7 @@ bool MyMesh::enqueueBotResponse(const BotMessage &message, const ContactInfo *di
+ 
+   PendingBotResponse *pending = &pending_bot_responses[slot];
+   pending->direct = message.channel_kind == BOT_CHANNEL_DM;
++  pending->channel_kind = message.channel_kind;
+   if (pending->direct) {
+     if (!direct_recipient) return false;
+     memcpy(pending->recipient_pub_key, direct_recipient->id.pub_key, sizeof(pending->recipient_pub_key));
+@@ -1447,7 +1448,7 @@ bool MyMesh::dispatchBotTraceDirectLink(const BotMessage &message, const Contact
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
+   uint32_t now = _ms->getMillis();
+   if (!direct_recipient && ResponseCoordinator::recentlyAnswered(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
+-                                                                 FirmwareBot::requestToken(request_fingerprint), now)) {
++                                                                 FirmwareBot::requestToken(request_fingerprint), message.channel_kind, now)) {
+     bot_stats.suppressed_responses++;
+     return true;
+   }
+@@ -1525,7 +1526,7 @@ bool MyMesh::handleBotTraceCommand(const BotMessage &message, const ContactInfo
+ 
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
+   if (!direct_recipient && ResponseCoordinator::recentlyAnswered(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
+-                                                                 FirmwareBot::requestToken(request_fingerprint), _ms->getMillis())) {
++                                                                 FirmwareBot::requestToken(request_fingerprint), message.channel_kind, _ms->getMillis())) {
+     bot_stats.suppressed_responses++;
+     return true;
+   }
+@@ -1594,12 +1595,12 @@ bool MyMesh::enqueueBotTrace(const BotMessage &message, const ContactInfo *direc
+   PendingBotTrace *pending = &pending_bot_traces[slot];
+   memset(pending, 0, sizeof(*pending));
+   pending->direct = message.channel_kind == BOT_CHANNEL_DM;
++  pending->channel_kind = message.channel_kind;
+   if (pending->direct) {
+     if (!direct_recipient) return false;
+     memcpy(pending->recipient_pub_key, direct_recipient->id.pub_key, sizeof(pending->recipient_pub_key));
+   }
+   pending->channel_idx = channel_idx;
+-  pending->channel_kind = message.channel_kind;
+   StrHelper::strzcpy(pending->channel_name, message.channel_name, sizeof(pending->channel_name));
+   StrHelper::strzcpy(pending->target_name, message.sender_name, sizeof(pending->target_name));
+   memcpy(pending->sender_key_prefix, message.sender_key_prefix, sizeof(pending->sender_key_prefix));
+@@ -1667,7 +1668,7 @@ bool MyMesh::sendBotTraceText(const PendingBotTrace &pending, const char *text,
+                                       now_millis);
+     if (!pending.direct) {
+       ResponseCoordinator::recordRequestToken(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
+-                                              FirmwareBot::requestToken(pending.request_fingerprint), now_millis);
++                                              FirmwareBot::requestToken(pending.request_fingerprint), pending.channel_kind, now_millis);
+     }
+   } else {
+     bot_stats.send_failures++;
+@@ -1776,8 +1777,8 @@ bool MyMesh::observeBotGroupResponse(const BotMessage &message) {
+   size_t token_prefix_len = 0;
+   bool token_suppressed = false;
+   if (FirmwareBot::parseRequestTokenPrefix(message.text, message.text_len, &token, &token_prefix_len)) {
+-    ResponseCoordinator::recordRequestToken(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS, token, _ms->getMillis());
+-    if (ResponseCoordinator::suppressByRequestToken(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, token)) {
++    ResponseCoordinator::recordRequestToken(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS, token, message.channel_kind, _ms->getMillis());
++    if (ResponseCoordinator::suppressByRequestToken(bot_coordinator_pending, BOT_COORDINATOR_PENDING_SLOTS, token, message.channel_kind)) {
+       token_suppressed = true;
+     }
+   }
+@@ -1900,7 +1901,7 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+ 
+   BotFingerprint request_fingerprint = FirmwareBot::fingerprintFor(message);
+   if (!direct_recipient && ResponseCoordinator::recentlyAnswered(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
+-                                                                 FirmwareBot::requestToken(request_fingerprint), _ms->getMillis())) {
++                                                                 FirmwareBot::requestToken(request_fingerprint), message.channel_kind, _ms->getMillis())) {
+     bot_stats.suppressed_responses++;
+     return;
+   }
+@@ -1976,7 +1977,7 @@ void MyMesh::sendQueuedBotResponses() {
+       continue;
+     }
+     if (!pending->direct && ResponseCoordinator::recentlyAnswered(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
+-                                                                  FirmwareBot::requestToken(ready.request_fingerprint), now)) {
++                                                                  FirmwareBot::requestToken(ready.request_fingerprint), (BotChannelKind)pending->channel_kind, now)) {
+       bot_stats.suppressed_responses++;
+       pending->active = false;
+       continue;
+@@ -2011,7 +2012,7 @@ void MyMesh::sendQueuedBotResponses() {
+                                         pending->response_fingerprint, now);
+       if (!pending->direct) {
+         ResponseCoordinator::recordRequestToken(bot_coordinator_recent, BOT_COORDINATOR_RECENT_SLOTS,
+-                                                FirmwareBot::requestToken(pending->request_fingerprint), now);
++                                                FirmwareBot::requestToken(pending->request_fingerprint), (BotChannelKind)pending->channel_kind, now);
+       }
+     } else {
+       bot_stats.send_failures++;
+diff --git a/examples/companion_radio/MyMesh.h b/examples/companion_radio/MyMesh.h
+index 149f0835..33572c53 100644
+--- a/examples/companion_radio/MyMesh.h
++++ b/examples/companion_radio/MyMesh.h
+@@ -291,6 +291,7 @@ private:
+   struct PendingBotResponse {
+     bool active;
+     bool direct;
++    uint8_t channel_kind;
+     uint8_t recipient_pub_key[PUB_KEY_SIZE];
+     uint8_t channel_idx;
+     BotFingerprint request_fingerprint;
+diff --git a/examples/companion_radio/ResponseCoordinator.cpp b/examples/companion_radio/ResponseCoordinator.cpp
+index 888cdf49..939ecc98 100644
+--- a/examples/companion_radio/ResponseCoordinator.cpp
++++ b/examples/companion_radio/ResponseCoordinator.cpp
+@@ -136,6 +136,7 @@ BotCoordinatorScheduleResult schedule(BotCoordinatorPending pending[], size_t pe
+   bool replaced = pending[slot].active;
+   bool preserve_suppressed = replaced && pending[slot].suppressed &&
+                              sameFingerprint(pending[slot].request_fingerprint, request_fingerprint);
++  pending[slot].channel_kind = message.channel_kind;
+   pending[slot].active = true;
+   pending[slot].suppressed = preserve_suppressed;
+   pending[slot].request_fingerprint = request_fingerprint;
+@@ -159,11 +160,11 @@ bool suppress(BotCoordinatorPending pending[], size_t pending_count, BotFingerpr
+   return suppressed;
+ }
+ 
+-bool suppressByRequestToken(BotCoordinatorPending pending[], size_t pending_count, uint16_t request_token) {
+-  if (!pending) return false;
++bool suppressByRequestToken(BotCoordinatorPending pending[], size_t pending_count, uint16_t request_token, BotChannelKind channel_kind) {
++  if (!pending || (channel_kind != BOT_CHANNEL_BOT && channel_kind != BOT_CHANNEL_TESTING)) return false;
+   bool suppressed = false;
+   for (size_t i = 0; i < pending_count; i++) {
+-    if (!pending[i].active) continue;
++    if (!pending[i].active || pending[i].channel_kind != channel_kind) continue;
+     if (pending[i].request_fingerprint.value == 0) continue;
+     uint16_t token = requestToken(pending[i].request_fingerprint);
+     if (token == request_token) {
+@@ -254,9 +255,9 @@ bool recentlySent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerp
+   return false;
+ }
+ 
+-void recordRequestToken(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token,
++void recordRequestToken(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token, BotChannelKind channel_kind,
+                         uint32_t now_millis) {
+-  if (!recent || recent_count == 0) return;
++  if (!recent || recent_count == 0 || (channel_kind != BOT_CHANNEL_BOT && channel_kind != BOT_CHANNEL_TESTING)) return;
+ 
+   size_t slot = recent_count;
+   for (size_t i = 0; i < recent_count; i++) {
+@@ -266,7 +267,7 @@ void recordRequestToken(BotCoordinatorRecent recent[], size_t recent_count, uint
+     if (recent[i].active && recent[i].request_active && millisDue(now_millis, recent[i].request_expires_at_millis)) {
+       recent[i].request_active = false;
+     }
+-    if (recent[i].active && recent[i].request_active && recent[i].request_token == request_token) {
++    if (recent[i].active && recent[i].request_active && recent[i].request_token == request_token && recent[i].channel_kind == channel_kind) {
+       slot = i;
+       break;
+     }
+@@ -278,18 +279,19 @@ void recordRequestToken(BotCoordinatorRecent recent[], size_t recent_count, uint
+   recent[slot].active = true;
+   recent[slot].request_active = true;
+   recent[slot].request_token = request_token;
++  recent[slot].channel_kind = channel_kind;
+   recent[slot].request_expires_at_millis = now_millis + BOT_RESPONSE_RECENT_TTL_MILLIS;
+ }
+ 
+-bool recentlyAnswered(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token,
++bool recentlyAnswered(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token, BotChannelKind channel_kind,
+                       uint32_t now_millis) {
+-  if (!recent) return false;
++  if (!recent || (channel_kind != BOT_CHANNEL_BOT && channel_kind != BOT_CHANNEL_TESTING)) return false;
+   for (size_t i = 0; i < recent_count; i++) {
+     if (!recent[i].active) continue;
+     if (recent[i].request_active && millisDue(now_millis, recent[i].request_expires_at_millis)) {
+       recent[i].request_active = false;
+     }
+-    if (recent[i].request_active && recent[i].request_token == request_token) return true;
++    if (recent[i].request_active && recent[i].request_token == request_token && recent[i].channel_kind == channel_kind) return true;
+     if (recent[i].response_fingerprint.value == 0 && !recent[i].request_active) recent[i].active = false;
+   }
+   return false;
+diff --git a/examples/companion_radio/ResponseCoordinator.h b/examples/companion_radio/ResponseCoordinator.h
+index c1b5ca04..e8966446 100644
+--- a/examples/companion_radio/ResponseCoordinator.h
++++ b/examples/companion_radio/ResponseCoordinator.h
+@@ -32,16 +32,16 @@ BotCoordinatorScheduleResult schedule(BotCoordinatorPending pending[], size_t pe
+                                       uint8_t queue_depth, uint16_t base_delay_millis, uint16_t jitter_millis,
+                                       uint16_t hop_step_millis, BotFingerprint* fingerprint, uint32_t* due_at_millis);
+ bool suppress(BotCoordinatorPending pending[], size_t pending_count, BotFingerprint response_fingerprint);
+-bool suppressByRequestToken(BotCoordinatorPending pending[], size_t pending_count, uint16_t request_token);
++bool suppressByRequestToken(BotCoordinatorPending pending[], size_t pending_count, uint16_t request_token, BotChannelKind channel_kind);
+ bool cancel(BotCoordinatorPending pending[], size_t pending_count, BotFingerprint request_fingerprint);
+ BotCoordinatorReady poll(BotCoordinatorPending pending[], size_t pending_count, uint32_t now_millis);
+ void recordRecent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerprint response_fingerprint,
+                   uint32_t now_millis);
+ bool recentlySent(BotCoordinatorRecent recent[], size_t recent_count, BotFingerprint response_fingerprint,
+                   uint32_t now_millis);
+-void recordRequestToken(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token,
++void recordRequestToken(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token, BotChannelKind channel_kind,
+                         uint32_t now_millis);
+-bool recentlyAnswered(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token,
++bool recentlyAnswered(BotCoordinatorRecent recent[], size_t recent_count, uint16_t request_token, BotChannelKind channel_kind,
+                       uint32_t now_millis);
+ 
+ }

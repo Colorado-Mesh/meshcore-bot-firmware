@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: CJ Vana <cj@depth23.online>
 Date: Fri, 10 Jul 2026 15:19:21 -0600
-Subject: [PATCH 15/15] Add sig/air/coin commands; derive help listings from
+Subject: [PATCH 15/18] Add sig/air/coin commands; derive help listings from
  the registry
 
 - sig (aliases snr/rssi/signal): reports the SNR the bot heard the
@@ -230,10 +230,10 @@ index a54949d9..b91b291d 100644
  enum BotCommandResultCode : uint8_t {
    BOT_COMMAND_RESULT_NOT_HANDLED = 0,
 diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
-index 5e00c9d2..fc37823c 100644
+index 2e5b6db9..4c36c59e 100644
 --- a/examples/companion_radio/MyMesh.cpp
 +++ b/examples/companion_radio/MyMesh.cpp
-@@ -1142,7 +1142,8 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
+@@ -1145,7 +1145,8 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
    context.pending_responses = bot_stats.pending_responses;
    context.emergency_forwards = bot_stats.emergency_forwards;
    context.emergency_forward_failures = bot_stats.emergency_forward_failures;
@@ -243,7 +243,7 @@ index 5e00c9d2..fc37823c 100644
      getRNG()->random((uint8_t *)&context.random_seed, sizeof(context.random_seed));
    }
    if (command_id == BOT_COMMAND_STATUS || command_id == BOT_COMMAND_STATS) {
-@@ -1160,7 +1161,7 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
+@@ -1163,7 +1164,7 @@ void MyMesh::buildBotCommandContext(BotCommandContext &context, BotCommandId com
      StrHelper::strzcpy(context.firmware_version, FIRMWARE_VERSION, sizeof(context.firmware_version));
      StrHelper::strzcpy(context.firmware_build_date, FIRMWARE_BUILD_DATE, sizeof(context.firmware_build_date));
    }
@@ -252,7 +252,7 @@ index 5e00c9d2..fc37823c 100644
      context.queue_depth = (uint8_t)_mgr->getOutboundTotal();
      context.noise_floor = (int16_t)_radio->getNoiseFloor();
      context.last_rssi = (int8_t)radio_driver.getLastRSSI();
-@@ -1842,7 +1843,8 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
+@@ -1845,7 +1846,8 @@ void MyMesh::recordBotObservation(const BotMessage &message, const ContactInfo *
    if (message.sender_name[0]) {
      StrHelper::strzcpy(context.response_target, message.sender_name, sizeof(context.response_target));
    }

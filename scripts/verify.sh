@@ -51,10 +51,11 @@ else
 fi
 
 python3 "${MESHCORE_FW_ROOT}/tests/firmware_bot/run_tests.py"
+python3 -m unittest discover -s "${MESHCORE_FW_ROOT}/tests" -p 'test_*.py'
 bash "${MESHCORE_FW_ROOT}/scripts/check-bot-safety.sh"
 python3 -m py_compile \
-  "${MESHCORE_FW_ROOT}/scripts/parse-size-report.py" \
-  "${MESHCORE_FW_ROOT}/tests/firmware_bot/run_tests.py"
+  "${MESHCORE_FW_ROOT}"/scripts/*.py \
+  "${MESHCORE_FW_ROOT}"/tests/*/run_tests.py
 
 if [ "$run_build" -eq 1 ]; then
   MESHCORE_SKIP_APPLY_PATCHES=1 bash "${MESHCORE_FW_ROOT}/scripts/build-representative.sh" --baseline

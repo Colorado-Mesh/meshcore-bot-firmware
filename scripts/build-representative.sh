@@ -104,6 +104,7 @@ SUMMARY_PATH="${LOG_DIR}/summary.json"
 
 rm -rf "$OUT_DIR"
 mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
+(cd "$MESHCORE_DIR" && pio project config --json-output) > "${LOG_DIR}/config.json"
 
 export FIRMWARE_VERSION="${FIRMWARE_VERSION:-local}"
 
@@ -111,9 +112,13 @@ failed_envs=()
 for env in "${REPRESENTATIVE_ENVS[@]}"; do
   log_path="${LOG_DIR}/${env}.log"
   echo "Building ${env} (CMESH_BOT_ENABLED=1, private-key import/export disabled)"
+  rm -f "${MESHCORE_DIR}/out/${env}-"*
   if (cd "$MESHCORE_DIR" && /usr/bin/env bash build.sh build-firmware "$env") >"$log_path" 2>&1; then
     if compgen -G "${MESHCORE_DIR}/out/${env}-*" >/dev/null; then
       cp "${MESHCORE_DIR}/out/${env}-"* "$ARTIFACT_DIR"/
+    fi
+    if ! python3 "${MESHCORE_FW_ROOT}/scripts/check-release-artifacts.py" --artifacts "$ARTIFACT_DIR" --env "$env" --config-json "${LOG_DIR}/config.json"; then
+      failed_envs+=("$env")
     fi
   else
     failed_envs+=("$env")
@@ -155,4 +160,4 @@ if [ "${#failed_envs[@]}" -gt 0 ]; then
   exit 1
 fi
 
-echo "Representative build complete. Summary: ${SUMMARY_PATH#${MESHCORE_FW_ROOT}/}"
+echo "Representative build complete. Summary: ${SUMMARY_PATH#"${MESHCORE_FW_ROOT}"/}"

@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Mon, 12 Oct 2026 13:03:20 -0600
+Subject: [PATCH 17/18] Validate encrypted packet and companion response bounds
+
+---
+ examples/companion_radio/MyMesh.cpp | 9 +++++----
+ src/Mesh.cpp                        | 3 ++-
+ src/Packet.cpp                      | 7 ++++++-
+ src/Packet.h                        | 1 +
+ src/Utils.cpp                       | 4 +++-
+ 5 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index b5b25268..ce0daea4 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -2227,6 +2227,7 @@ uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_tim
+ }
+ 
+ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, uint8_t len) {
++  if (len < 4 || len + 4 > MAX_FRAME_SIZE) return;
+   uint32_t tag;
+   memcpy(&tag, data, 4);
+ 
+@@ -2235,12 +2236,12 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data,
+     pending_login = 0;
+ 
+     int i = 0;
+-    if (memcmp(&data[4], "OK", 2) == 0) { // legacy Repeater login OK response
++    if (len >= 6 && memcmp(&data[4], "OK", 2) == 0) { // legacy Repeater login OK response
+       out_frame[i++] = PUSH_CODE_LOGIN_SUCCESS;
+       out_frame[i++] = 0; // legacy: is_admin = false
+       memcpy(&out_frame[i], contact.id.pub_key, 6);
+       i += 6;                                     // pub_key_prefix
+-    } else if (data[4] == RESP_SERVER_LOGIN_OK) { // new login response
++    } else if (len >= 13 && data[4] == RESP_SERVER_LOGIN_OK) { // new login response
+       uint16_t keep_alive_secs = ((uint16_t)data[5]) * 16;
+       if (keep_alive_secs > 0) {
+         startConnection(contact, keep_alive_secs);
+@@ -2275,7 +2276,7 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data,
+     memcpy(&out_frame[i], &data[4], len - 4);
+     i += (len - 4);
+     _serial->writeFrame(out_frame, i);
+-  } else if (len > 4 && tag == pending_telemetry) {  // check for matching response tag
++  } else if (len > 4 && pending_telemetry && tag == pending_telemetry) {  // check for matching response tag
+     pending_telemetry = 0;
+ 
+     int i = 0;
+@@ -2286,7 +2287,7 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data,
+     memcpy(&out_frame[i], &data[4], len - 4);
+     i += (len - 4);
+     _serial->writeFrame(out_frame, i);
+-  } else if (len > 4 && tag == pending_req) {  // check for matching response tag
++  } else if (len > 4 && pending_req && tag == pending_req) {  // check for matching response tag
+     pending_req = 0;
+ 
+     int i = 0;
+diff --git a/src/Mesh.cpp b/src/Mesh.cpp
+index 1736f527..55912ad4 100644
+--- a/src/Mesh.cpp
++++ b/src/Mesh.cpp
+@@ -176,6 +176,7 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
+                 }
+                 uint8_t hash_size = (path_len >> 6) + 1;
+                 uint8_t hash_count = path_len & 63;
++                if (!Packet::isValidPathPayload(path_len, len)) continue;
+                 uint8_t* path = &data[k]; k += hash_size*hash_count;
+                 uint8_t extra_type = data[k++] & 0x0F;   // upper 4 bits reserved for future use
+                 uint8_t* extra = &data[k];
+@@ -748,4 +749,4 @@ void Mesh::sendZeroHop(Packet* packet, uint16_t* transport_codes, uint32_t delay
+   sendPacket(packet, 0, delay_millis);
+ }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/src/Packet.cpp b/src/Packet.cpp
+index aad3e2f4..cf107837 100644
+--- a/src/Packet.cpp
++++ b/src/Packet.cpp
+@@ -17,6 +17,11 @@ bool Packet::isValidPathLen(uint8_t path_len) {
+   return hash_count*hash_size <= MAX_PATH_SIZE;
+ }
+ 
++bool Packet::isValidPathPayload(uint8_t path_len, size_t data_len) {
++  size_t path_bytes = (path_len & 63) * ((path_len >> 6) + 1);
++  return isValidPathLen(path_len) && path_bytes + 2 <= data_len;
++}
++
+ size_t Packet::writePath(uint8_t* dest, const uint8_t* src, uint8_t path_len) {
+   uint8_t hash_count = path_len & 63;
+   uint8_t hash_size = (path_len >> 6) + 1;
+@@ -84,4 +89,4 @@ bool Packet::readFrom(const uint8_t src[], uint8_t len) {
+   return true;   // success
+ }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/src/Packet.h b/src/Packet.h
+index c19d9e9d..bb9ed971 100644
+--- a/src/Packet.h
++++ b/src/Packet.h
+@@ -85,6 +85,7 @@ public:
+   static uint8_t copyPath(uint8_t* dest, const uint8_t* src, uint8_t path_len);  // returns path_len
+   static size_t writePath(uint8_t* dest, const uint8_t* src, uint8_t path_len);  // returns byte length written
+   static bool isValidPathLen(uint8_t path_len);
++  static bool isValidPathPayload(uint8_t path_len, size_t data_len);
+ 
+   void markDoNotRetransmit() { header = 0xFF; }
+   bool isMarkedDoNotRetransmit() const { return header == 0xFF; }
+diff --git a/src/Utils.cpp b/src/Utils.cpp
+index 5ae7f0e2..19ecd2d1 100644
+--- a/src/Utils.cpp
++++ b/src/Utils.cpp
+@@ -51,6 +51,7 @@ void Utils::sha256(uint8_t *hash, size_t hash_len, const uint8_t* frag1, int fra
+ }
+ 
+ int Utils::decrypt(const uint8_t* shared_secret, uint8_t* dest, const uint8_t* src, int src_len) {
++  if (!shared_secret || !dest || !src || src_len <= 0 || src_len % CIPHER_BLOCK_SIZE != 0) return 0;
+ #ifdef USE_CC310_HW_CRYPTO
+   static SaSiAesUserContext_t ctx;
+   SaSiAesUserKeyData_t keyData = { (uint8_t*)shared_secret, CIPHER_KEY_SIZE };
+@@ -145,7 +146,8 @@ int Utils::encryptThenMAC(const uint8_t* shared_secret, uint8_t* dest, const uin
+ }
+ 
+ int Utils::MACThenDecrypt(const uint8_t* shared_secret, uint8_t* dest, const uint8_t* src, int src_len) {
+-  if (src_len <= CIPHER_MAC_SIZE) return 0;  // invalid src bytes
++  if (!shared_secret || !dest || !src || src_len <= CIPHER_MAC_SIZE ||
++      (src_len - CIPHER_MAC_SIZE) % CIPHER_BLOCK_SIZE != 0) return 0;
+ 
+   uint8_t hmac[CIPHER_MAC_SIZE];
+ #ifdef USE_CC310_HW_CRYPTO

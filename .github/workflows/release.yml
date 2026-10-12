@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -20,6 +20,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  DISABLE_DEBUG: 1
 
 jobs:
   enumerate:
@@ -32,22 +33,24 @@ jobs:
       env_count: ${{ steps.shards.outputs.env_count }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
 
       - name: Resolve release version
         id: version
+        env:
+          RELEASE_INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            version="${{ inputs.version }}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$RELEASE_INPUT_VERSION"
           else
             tag="${GITHUB_REF#refs/tags/}"
             # cmesh-bot-vX.Y.Z[-...]  ->  vX.Y.Z[-...]
             version="${tag#cmesh-bot-}"
           fi
-          if [ -z "$version" ]; then
-            echo "Could not derive a version label." >&2
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "Invalid release version label." >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -74,12 +77,12 @@ jobs:
         shard: ${{ fromJSON(needs.enumerate.outputs.shards) }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
 
       - name: Cache PlatformIO
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.cache/pip
@@ -91,15 +94,20 @@ jobs:
             ${{ runner.os }}-pio-
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.11'
 
       - name: Install PlatformIO
-        run: python3 -m pip install --upgrade platformio
+        run: python3 -m pip install platformio==6.2.0
 
       - name: Apply patches
         run: bash scripts/apply-patches.sh
+
+      - name: Check production flags and host tests
+        run: |
+          python3 scripts/check-companion-flags.py
+          MESHCORE_SKIP_APPLY_PATCHES=1 bash scripts/verify.sh --no-build
 
       - name: Select envs for this shard
         id: select
@@ -113,16 +121,19 @@ jobs:
           printf '%s\n' "$shard_envs"
 
       - name: Build firmware
+        shell: bash
         env:
           FIRMWARE_VERSION: ${{ needs.enumerate.outputs.version }}
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p out/firmware out/logs
           cd vendor/MeshCore
+          pio project config --json-output > ../../out/config.json
           while IFS= read -r env; do
             [ -z "$env" ] && continue
             log="../../out/logs/$env.log"
             echo "::group::Building $env"
+            rm -f out/"$env"-*
             if /usr/bin/env bash build.sh build-firmware "$env" 2>&1 | tee "$log"; then
               echo "::endgroup::"
               if compgen -G "out/$env-*" >/dev/null; then
@@ -133,41 +144,62 @@ jobs:
               echo "::error::Build failed for $env (see logs artifact)"
               exit 1
             fi
+            python3 ../../scripts/check-release-artifacts.py --artifacts ../../out/firmware --env "$env" --config-json ../../out/config.json
           done <<< "${{ steps.select.outputs.envs }}"
 
       - name: Upload firmware shard
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: firmware-shard-${{ matrix.shard }}
           path: out/firmware
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: build-logs-shard-${{ matrix.shard }}
           path: out/logs
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
   release:
     name: Publish draft release
+    permissions:
+      contents: write
     needs: [enumerate, build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
 
       - name: Download all firmware shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: firmware-shard-*
           merge-multiple: true
           path: release-firmware
+
+      - name: Install Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: python3 -m pip install platformio==6.2.0
+
+      - name: Verify all release targets and write checksums
+        env:
+          RELEASE_VERSION: ${{ needs.enumerate.outputs.version }}
+        run: |
+          bash scripts/list-release-companion-envs.sh > expected-envs.txt
+          pio project config --project-dir vendor/MeshCore --json-output > release-config.json
+          python3 scripts/check-release-artifacts.py --artifacts release-firmware --env-file expected-envs.txt --manifest --version "$RELEASE_VERSION" --config-json release-config.json
 
       - name: List release artifacts
         run: |

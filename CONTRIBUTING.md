@@ -12,7 +12,7 @@ overlay files, tests, and tooling live at the wrapper level.
 | Bootstrap | `git submodule update --init --recursive && bash scripts/apply-patches.sh` |
 | Run host tests + safety checks | `MESHCORE_SKIP_APPLY_PATCHES=1 bash scripts/verify.sh --no-build` |
 | Build representative firmwares | `bash scripts/build-representative.sh --baseline` |
-| Export patch queue after edits | `bash scripts/export-patches.sh origin/main` |
+| Export patch queue after edits | `bash scripts/export-patches.sh d9296435` |
 
 ## Development workflow
 
@@ -20,15 +20,15 @@ The submodule is a real git repo. Iterate inside it like normal:
 
 1. **Bootstrap once** (clone with `--recurse-submodules`, or run
    `git submodule update --init --recursive`).
-2. **Apply patches** with `bash scripts/apply-patches.sh`. This commits the
-   patch queue on top of `origin/main` in the submodule, leaving you with
-   a clean tree pinned to a known state.
+2. **Apply patches** with `bash scripts/apply-patches.sh`. This stages the patch queue on the pinned upstream commit and injects
+   production flags into every USB/BLE companion environment. The generated
+   submodule tree is intentionally dirty.
 3. **Edit inside `vendor/MeshCore/`.** Compile with `pio run -e <env>`
    and commit your changes in the submodule with descriptive messages.
 4. **Re-export the patch queue** with
-   `bash scripts/export-patches.sh origin/main`. This deletes
+   `bash scripts/export-patches.sh d9296435`. This deletes
    `patches/meshcore/*.patch` and regenerates it from the submodule
-   commits since `origin/main`. Each patch corresponds to one submodule
+   commits since the pinned upstream base. Each patch corresponds to one submodule
    commit, so keep commits small and focused.
 5. **Run host tests** (`python3 tests/firmware_bot/run_tests.py`). Fast,
    no hardware needed.
@@ -39,7 +39,8 @@ The submodule is a real git repo. Iterate inside it like normal:
    `bash scripts/build-representative.sh --baseline` to confirm the
    binaries still link and to inspect size impact in `out/size/summary.json`.
 8. **Commit at the wrapper level** with the regenerated patches, any
-   test/script changes, and the updated submodule pointer. PR-ready.
+   test/script changes. Keep the submodule pointer on the upstream base, not
+   a local patch commit that is unavailable from the upstream repository.
 
 ## What goes where
 
@@ -74,7 +75,7 @@ PRs run `.github/workflows/firmware-build.yml`, which:
 3. Uploads firmware + size reports as workflow artifacts.
 
 Releases run `.github/workflows/release.yml` on `cmesh-bot-v*` tags and
-build every non-excluded companion USB+BLE environment (139 at the current
+build every non-excluded companion USB+BLE environment (153 at the current
 pin); see [RELEASE.md](RELEASE.md).
 
 ## Pull request expectations

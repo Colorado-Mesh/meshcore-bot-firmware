@@ -5,12 +5,14 @@ Releases are produced by pushing a `cmesh-bot-vX.Y.Z` tag. The
 
 1. Builds **every** companion USB+BLE environment exposed by the pinned
    MeshCore submodule, minus the exclusion list in
-   `scripts/list-release-companion-envs.sh` (139 boards at the current pin).
+   `scripts/list-release-companion-envs.sh` (153 USB/BLE environments at the current pin).
 2. Splits the build across 8 parallel matrix shards for wall-time.
 3. Embeds the tag version (`vX.Y.Z`) into the firmware via
    `FIRMWARE_VERSION`.
-4. Uploads each shard's artifacts.
-5. Aggregates everything into a single GitHub Release in draft state,
+4. Requires installable artifacts for every selected environment and uploads
+   each shard.
+5. Verifies all selected environments, writes `manifest.json` and
+   `SHA256SUMS`, and aggregates everything into a single GitHub Release in draft state,
    ready for you to add release notes and publish.
 
 ## Prerequisites
@@ -41,7 +43,9 @@ The `release.yml` workflow will start automatically. Track progress at
 
 When the workflow finishes, a **draft** release will appear at
 <https://github.com/Colorado-Mesh/meshcore-bot-firmware/releases>.
-Review it, paste in the CHANGELOG entry as the description, and publish.
+Review the full matrix, compare `manifest.json` with the expected environment
+count, verify `SHA256SUMS`, paste in the CHANGELOG entry as the description,
+and publish. Build success alone is insufficient if any target assets are missing.
 
 ## Tag scheme
 

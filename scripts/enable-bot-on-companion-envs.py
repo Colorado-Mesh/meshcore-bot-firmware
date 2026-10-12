@@ -6,17 +6,19 @@ Run after scripts/apply-patches.sh. Idempotent: skips envs that already
 include the flag.
 
 Upstream MeshCore only includes cmesh_bot_production in Heltec V3 and
-RAK 4631 variants. For our release matrix (133 companion envs) we want
+RAK 4631 variants. For our release matrix we want
 the bot enabled everywhere, and we don't want to maintain a patch
 that has to be kept in sync with every new upstream board.
 """
 from __future__ import annotations
 
 import re
+import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1] / "vendor" / "MeshCore" / "variants"
+MESHCORE_DIR = Path(os.environ.get("MESHCORE_DIR", str(Path(__file__).resolve().parents[1] / "vendor" / "MeshCore")))
+ROOT = MESHCORE_DIR / "variants"
 ENV_HEADER = re.compile(r"^\[env:[A-Za-z0-9_-]+_companion_radio_(?:usb|ble)\]\s*$")
 NEW_SECTION = re.compile(r"^\[")
 INJECT_LINE = "  ${cmesh_bot_production.build_flags}"
@@ -84,7 +86,7 @@ def main() -> int:
     for ini in sorted(ROOT.rglob("platformio.ini")):
         n = process_file(ini)
         if n:
-            print(f"  + {ini.relative_to(ROOT.parent.parent.parent)}: injected into {n} env(s)")
+            print(f"  + {ini.relative_to(MESHCORE_DIR)}: injected into {n} env(s)")
             files_touched += 1
             total += n
 
