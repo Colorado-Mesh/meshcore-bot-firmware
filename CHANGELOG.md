@@ -6,7 +6,7 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
 
 ## [Unreleased]
 
-## [cmesh-bot-v0.2.0] - 2026-10-12
+## [cmesh-bot-v0.2.1] - 2026-10-12
 
 ### Changed
 
@@ -14,6 +14,9 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
   companion 1.17.1 release (`d9296435`), preserving bot preferences and
   adapting the patch queue to the new preference storage and USB/routing APIs.
 - Release coverage increased to 153 companion USB/BLE environments.
+- Replaced the upstream float formatter's `ltoa` call with portable integer
+  formatting and pinned the compatible STM32 19.7.1 platform/Arduino 2.12 core.
+  The newer unpinned core 3.0 changes GPIO types used by the pinned RadioLib.
 - Updated GitHub Actions and pinned PlatformIO 6.2.0; disabled debug logging
   while retaining the NRF52 framework's required `CFG_DEBUG` definition.
 
@@ -37,6 +40,11 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
   handler under AddressSanitizer and UndefinedBehaviorSanitizer.
 - Hardware flashing, over-the-air behavior, and bootloader policies require
   device verification; source/host/build validation does not cover those checks.
+
+## [cmesh-bot-v0.2.0] - 2026-10-12
+
+Unpublished build tag. The full matrix exposed an upstream STM32 compilation
+error; no release artifacts were published. Its changes are included in v0.2.1.
 
 ## [cmesh-bot-v0.1.0] - 2026-07-10
 

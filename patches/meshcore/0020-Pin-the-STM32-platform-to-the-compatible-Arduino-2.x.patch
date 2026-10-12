@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Mon, 12 Oct 2026 13:50:42 -0600
+Subject: [PATCH 20/20] Pin the STM32 platform to the compatible Arduino 2.x
+ core
+
+---
+ platformio.ini | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/platformio.ini b/platformio.ini
+index 792ba411..47a05245 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -118,7 +118,8 @@ build_flags = ${arduino_base.build_flags}
+ 
+ [stm32_base]
+ extends = arduino_base
+-platform = ststm32
++; Core 3.0 changes GPIO types; the pinned RadioLib revision uses the 2.x API.
++platform = ststm32@19.7.1
+ extra_scripts = post:arch/stm32/build_hex.py
+ build_flags = ${arduino_base.build_flags}
+   -D STM32_PLATFORM

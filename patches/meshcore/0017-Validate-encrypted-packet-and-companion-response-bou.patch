@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Mon, 12 Oct 2026 13:03:20 -0600
-Subject: [PATCH 17/18] Validate encrypted packet and companion response bounds
+Subject: [PATCH 17/20] Validate encrypted packet and companion response bounds
 
 ---
  examples/companion_radio/MyMesh.cpp | 9 +++++----

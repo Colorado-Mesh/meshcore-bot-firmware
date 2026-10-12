@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Mon, 12 Oct 2026 13:47:56 -0600
+Subject: [PATCH 19/20] Use portable integer formatting on STM32 companion
+ builds
+
+---
+ src/helpers/TxtDataHelpers.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/helpers/TxtDataHelpers.cpp b/src/helpers/TxtDataHelpers.cpp
+index d327931f..b17b8936 100644
+--- a/src/helpers/TxtDataHelpers.cpp
++++ b/src/helpers/TxtDataHelpers.cpp
+@@ -102,7 +102,7 @@ static void _ftoa(float f, char *p, int *status)
+     *p++ = '0';
+   else 
+   {
+-    ltoa(int_part, p, 10);
++    snprintf(p, 11, "%ld", (long) int_part);
+     while (*p)
+       p++;
+   }
