@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Mon, 12 Oct 2026 14:35:42 -0600
+Subject: [PATCH 23/23] Fit Station G3 BLE firmware with link-time optimization
+
+---
+ arch/esp32/enable_lto.py                 | 4 ++++
+ variants/station_g3_esp32/platformio.ini | 3 +++
+ 2 files changed, 7 insertions(+)
+ create mode 100644 arch/esp32/enable_lto.py
+
+diff --git a/arch/esp32/enable_lto.py b/arch/esp32/enable_lto.py
+new file mode 100644
+index 00000000..922ec1e6
+--- /dev/null
++++ b/arch/esp32/enable_lto.py
+@@ -0,0 +1,4 @@
++Import("env")
++
++# Arduino ESP32 disables LTO at link time even when compilation uses -flto.
++env.Append(LINKFLAGS=["-flto"])
+diff --git a/variants/station_g3_esp32/platformio.ini b/variants/station_g3_esp32/platformio.ini
+index 074d6a2e..04c58a38 100644
+--- a/variants/station_g3_esp32/platformio.ini
++++ b/variants/station_g3_esp32/platformio.ini
+@@ -116,8 +116,11 @@ lib_deps =
+ 
+ [env:Station_G3_ESP32_companion_radio_ble]
+ extends = Station_G3_ESP32
++extra_scripts = ${esp32_base.extra_scripts}
++  post:arch/esp32/enable_lto.py
+ build_flags =
+   ${Station_G3_ESP32.build_flags}
++  -flto
+   -I examples/companion_radio/ui-new
+   -D MAX_CONTACTS=350
+   -D MAX_GROUP_CHANNELS=40

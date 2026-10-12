@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Mon, 12 Oct 2026 14:05:34 -0600
-Subject: [PATCH 21/22] Export HEX images for J-Link Nordic firmware targets
+Subject: [PATCH 21/23] Export HEX images for J-Link Nordic firmware targets
 
 ---
  build.sh | 14 ++++++++++++++

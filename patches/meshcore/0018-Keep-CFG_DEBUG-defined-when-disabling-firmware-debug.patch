@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Mon, 12 Oct 2026 13:05:34 -0600
-Subject: [PATCH 18/22] Keep CFG_DEBUG defined when disabling firmware debug
+Subject: [PATCH 18/23] Keep CFG_DEBUG defined when disabling firmware debug
  output
 
 ---

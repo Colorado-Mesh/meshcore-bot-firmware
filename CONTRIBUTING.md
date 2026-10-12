@@ -70,8 +70,9 @@ The submodule is a real git repo. Iterate inside it like normal:
 PRs run `.github/workflows/firmware-build.yml`, which:
 
 1. Runs host tests + safety checks (`scripts/verify.sh --no-build`).
-2. Builds the six representative companion environments (Heltec V3 and
-   RAK 4631 USB/BLE, RAK 11310 USB, and RAK 3x72 USB).
+2. Builds the eight representative companion environments (Heltec V3 and
+   RAK 4631 USB/BLE, RAK 11310 USB, RAK 3x72 USB, Station G3 BLE,
+   and Wio E5 Mini USB).
 3. Uploads firmware + size reports as workflow artifacts.
 
 Releases run `.github/workflows/release.yml` on `cmesh-bot-v*` tags and

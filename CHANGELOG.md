@@ -6,7 +6,7 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
 
 ## [Unreleased]
 
-## [cmesh-bot-v0.2.2] - 2026-10-12
+## [cmesh-bot-v0.2.3] - 2026-10-12
 
 ### Changed
 
@@ -20,6 +20,8 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
 - Enabled STM32 link-time optimization to retain the full bot command set
   within the Wio E5 Mini flash budget; separated companion preference types
   from the common CLI types to avoid conflicting definitions during linking.
+- Enabled compilation and linking with LTO for Station G3 BLE to fit the
+  existing application partition while retaining its features and storage layout.
 - Updated GitHub Actions and pinned PlatformIO 6.2.0; disabled debug logging
   while retaining the NRF52 framework's required `CFG_DEBUG` definition.
 
@@ -40,12 +42,18 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
 
 ### Validation
 
-- Representative CI now covers all four platforms across six environments.
+- Representative CI now covers all four platforms across eight environments,
+  including the flash-constrained Station G3 BLE and Wio E5 Mini targets.
 - Host bot regressions include channel isolation and overlapping channel roles.
 - Native packet regressions use the real Crypto library and production response
   handler under AddressSanitizer and UndefinedBehaviorSanitizer.
 - Hardware flashing, over-the-air behavior, and bootloader policies require
   device verification; source/host/build validation does not cover those checks.
+
+## [cmesh-bot-v0.2.2] - 2026-10-12
+
+Unpublished build tag. The full matrix exposed a Station G3 BLE application
+size overflow, fixed with LTO in v0.2.3 while preserving its partition layout.
 
 ## [cmesh-bot-v0.2.1] - 2026-10-12
 
@@ -55,7 +63,7 @@ DFU ZIP requirement for J-Link targets.
 ## [cmesh-bot-v0.2.0] - 2026-10-12
 
 Unpublished build tag. The full matrix exposed an upstream STM32 compilation
-error; no release artifacts were published. Its changes are included in v0.2.2.
+error; no release artifacts were published. Its changes are included in v0.2.3.
 
 ## [cmesh-bot-v0.1.0] - 2026-07-10
 

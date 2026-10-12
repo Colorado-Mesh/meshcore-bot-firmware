@@ -17,6 +17,8 @@ REPRESENTATIVE_ENVS=(
   RAK_4631_companion_radio_ble
   RAK_11310_companion_radio_usb
   RAK_3x72_companion_radio_usb
+  Station_G3_ESP32_companion_radio_ble
+  wio-e5-mini_companion_radio_usb
 )
 
 meshcore_commit() {
