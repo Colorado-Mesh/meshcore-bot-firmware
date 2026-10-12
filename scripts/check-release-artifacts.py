@@ -25,6 +25,29 @@ def check_artifacts(directory, environments, required_suffixes=None, version=Non
     return files
 
 
+def required_artifacts(config, environments):
+    required = {}
+    for section, options in config:
+        env = section.removeprefix("env:")
+        if env not in environments:
+            continue
+        options = dict(options)
+        flags = " ".join(options.get("build_flags", []))
+        for platform, suffixes in {"ESP32_PLATFORM": ["-merged.bin", ".bin"],
+                                   "NRF52_PLATFORM": [".uf2", ".zip"],
+                                   "RP2040_PLATFORM": [".uf2", ".bin"],
+                                   "STM32_PLATFORM": [".bin", ".hex"]}.items():
+            if platform in flags:
+                # Nordic's builder generates DFU ZIPs for nrfutil, not J-Link.
+                if platform == "NRF52_PLATFORM" and options.get("upload_protocol") == "jlink":
+                    suffixes = [".uf2", ".hex"]
+                required[env] = suffixes
+                break
+    if set(required) != set(environments):
+        raise ValueError(f"Unknown platform for: {sorted(set(environments) - set(required))}")
+    return required
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts", type=Path, required=True)
@@ -42,20 +65,7 @@ def main():
         parser.error("At least one environment is required")
     required = {}
     if args.config_json:
-        for section, options in json.loads(args.config_json.read_text()):
-            env = section.removeprefix("env:")
-            if env not in envs:
-                continue
-            flags = " ".join(dict(options).get("build_flags", []))
-            for platform, suffixes in {"ESP32_PLATFORM": ["-merged.bin", ".bin"],
-                                       "NRF52_PLATFORM": [".uf2", ".zip"],
-                                       "RP2040_PLATFORM": [".uf2", ".bin"],
-                                       "STM32_PLATFORM": [".bin", ".hex"]}.items():
-                if platform in flags:
-                    required[env] = suffixes
-                    break
-        if set(required) != set(envs):
-            raise SystemExit(f"Unknown platform for: {sorted(set(envs) - set(required))}")
+        required = required_artifacts(json.loads(args.config_json.read_text()), envs)
     files = check_artifacts(args.artifacts, envs, required, args.version)
     if args.manifest:
         assets = [{"file": path.name, "bytes": path.stat().st_size,

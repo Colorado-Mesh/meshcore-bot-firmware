@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cj-vana <cj@depth23.online>
+Date: Mon, 12 Oct 2026 14:10:47 -0600
+Subject: [PATCH 22/22] Enable link-time optimization for constrained STM32
+ firmware
+
+---
+ examples/companion_radio/NodePrefs.h | 6 ++++++
+ platformio.ini                       | 2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/examples/companion_radio/NodePrefs.h b/examples/companion_radio/NodePrefs.h
+index 21766de8..a345966f 100644
+--- a/examples/companion_radio/NodePrefs.h
++++ b/examples/companion_radio/NodePrefs.h
+@@ -9,6 +9,8 @@
+ #define ADVERT_LOC_NONE       0
+ #define ADVERT_LOC_SHARE      1
+ 
++namespace companion {
++
+ class NodePrefs : public ConfigSerializer {  // persisted to file
+ public:
+   float airtime_factor = 0;
+@@ -143,3 +145,7 @@ public:
+   bool isRepeatEn() const { return repeat.disable_fwd == 0; }
+   void setRepeatEn(bool en) { repeat.disable_fwd = en ? 0 : 1; }
+ };
++
++}  // namespace companion
++
++using NodePrefs = companion::NodePrefs;
+diff --git a/platformio.ini b/platformio.ini
+index 47a05245..2ebdde25 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -123,6 +123,8 @@ platform = ststm32@19.7.1
+ extra_scripts = post:arch/stm32/build_hex.py
+ build_flags = ${arduino_base.build_flags}
+   -D STM32_PLATFORM
++  ; Keep the full bot command set within STM32WL's flash budget.
++  -flto
+   -I src/helpers/stm32
+   -I $PROJECT_PACKAGES_DIR/framework-arduinoststm32/libraries/SubGhz/src
+ build_src_filter = ${arduino_base.build_src_filter}

@@ -51,7 +51,8 @@ and many more). See the
 for the full list.
 
 PR CI builds a smaller "representative" matrix (Heltec V3 USB+BLE, RAK 4631
-USB+BLE) on every push, so the most common boards get fast feedback.
+USB+BLE, RAK 11310 USB, and RAK 3x72 USB) on every push, covering all four
+processor platforms.
 
 ## Install
 
@@ -147,7 +148,7 @@ worktree, then export the patch queue:
 bash scripts/export-patches.sh d9296435
 ```
 
-Build the four representative companion environments and write size reports:
+Build the six representative companion environments and write size reports:
 
 ```sh
 bash scripts/build-representative.sh --baseline

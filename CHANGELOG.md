@@ -6,7 +6,7 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
 
 ## [Unreleased]
 
-## [cmesh-bot-v0.2.1] - 2026-10-12
+## [cmesh-bot-v0.2.2] - 2026-10-12
 
 ### Changed
 
@@ -17,6 +17,9 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
 - Replaced the upstream float formatter's `ltoa` call with portable integer
   formatting and pinned the compatible STM32 19.7.1 platform/Arduino 2.12 core.
   The newer unpinned core 3.0 changes GPIO types used by the pinned RadioLib.
+- Enabled STM32 link-time optimization to retain the full bot command set
+  within the Wio E5 Mini flash budget; separated companion preference types
+  from the common CLI types to avoid conflicting definitions during linking.
 - Updated GitHub Actions and pinned PlatformIO 6.2.0; disabled debug logging
   while retaining the NRF52 framework's required `CFG_DEBUG` definition.
 
@@ -30,21 +33,29 @@ follows the `cmesh-bot-vX.Y.Z` scheme described in [RELEASE.md](RELEASE.md).
 - Production flag injection now honors customized MeshCore checkout paths,
   with effective bot/private-key flags checked for every companion environment.
 - Release builds now fail on missing or empty target artifacts and generate
-  a manifest and SHA-256 checksums before creating the draft release.
+  a manifest and SHA-256 checksums before creating the draft release. DFU ZIP
+  requirements follow the configured upload protocol; J-Link targets also
+  include their HEX image for debugger programming.
 - Corrected channel provisioning, response delay, and patch development docs.
 
 ### Validation
 
+- Representative CI now covers all four platforms across six environments.
 - Host bot regressions include channel isolation and overlapping channel roles.
 - Native packet regressions use the real Crypto library and production response
   handler under AddressSanitizer and UndefinedBehaviorSanitizer.
 - Hardware flashing, over-the-air behavior, and bootloader policies require
   device verification; source/host/build validation does not cover those checks.
 
+## [cmesh-bot-v0.2.1] - 2026-10-12
+
+Unpublished build tag. Superseded after correcting the artifact checker's
+DFU ZIP requirement for J-Link targets.
+
 ## [cmesh-bot-v0.2.0] - 2026-10-12
 
 Unpublished build tag. The full matrix exposed an upstream STM32 compilation
-error; no release artifacts were published. Its changes are included in v0.2.1.
+error; no release artifacts were published. Its changes are included in v0.2.2.
 
 ## [cmesh-bot-v0.1.0] - 2026-07-10
 

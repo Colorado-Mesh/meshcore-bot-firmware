@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Mon, 12 Oct 2026 13:02:58 -0600
-Subject: [PATCH 16/20] Scope response tokens to their channel and reject
+Subject: [PATCH 16/22] Scope response tokens to their channel and reject
  overlapping channel roles
 
 ---

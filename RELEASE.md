@@ -47,6 +47,9 @@ Review the full matrix, compare `manifest.json` with the expected environment
 count, verify `SHA256SUMS`, paste in the CHANGELOG entry as the description,
 and publish. Build success alone is insufficient if any target assets are missing.
 
+NRF52 environments configured for J-Link include a `.hex` image for debugger
+programming alongside UF2, rather than a DFU ZIP.
+
 ## Tag scheme
 
 - `cmesh-bot-vX.Y.Z`: production release.

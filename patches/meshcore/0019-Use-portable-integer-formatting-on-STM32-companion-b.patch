@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: cj-vana <cj@depth23.online>
 Date: Mon, 12 Oct 2026 13:47:56 -0600
-Subject: [PATCH 19/20] Use portable integer formatting on STM32 companion
+Subject: [PATCH 19/22] Use portable integer formatting on STM32 companion
  builds
 
 ---
