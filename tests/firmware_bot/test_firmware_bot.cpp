@@ -541,7 +541,7 @@ static void test_ack_response_format() {
   char out[BOT_MAX_RESPONSE_LEN + 1];
   size_t written = 0;
   assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
-  assert(strcmp(out, "@[alice] | 0 hops, SNR 0.00 | recv 21:25:45 | hello") == 0);
+  assert(strcmp(out, "@[alice] | 0 hops, SNR 0.00 | recv 03:25:45 UTC | hello") == 0);
   assert(written == strlen(out));
 
   message.channel_kind = BOT_CHANNEL_DM;
@@ -549,7 +549,7 @@ static void test_ack_response_format() {
   message.channel_name[0] = 0;
   assert(FirmwareBot::parseCommand("!t", 2, &command));
   assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
-  assert(strcmp(out, "@[unknown] | 0 hops, SNR 0.00 | recv 21:25:45") == 0);
+  assert(strcmp(out, "@[unknown] | 0 hops, SNR 0.00 | recv 03:25:45 UTC") == 0);
 
   uint8_t path[] = { 0x12, 0x34, 0xab, 0xcd };
   message.channel_kind = BOT_CHANNEL_BOT;
@@ -560,13 +560,13 @@ static void test_ack_response_format() {
   message.path_hash_count = 2;
   message.packet_snr_quarters = -5;
   assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
-  assert(strcmp(out, "@[bob] | 2 hops, 2-byte hashes, SNR -1.25 | recv 21:25:45") == 0);
+  assert(strcmp(out, "@[bob] | 2 hops, 2-byte hashes, SNR -1.25 | recv 03:25:45 UTC") == 0);
   assert(strstr(out, "Bot test OK") == NULL);
 
   message.channel_kind = BOT_CHANNEL_DM;
   message.channel_name[0] = 0;
   assert(FirmwareBot::writeAckResponse(message, command, out, sizeof(out), &written) == BOT_WRITE_OK);
-  assert(strcmp(out, "@[bob] | 2 hops, 2-byte hashes, SNR -1.25 | recv 21:25:45") == 0);
+  assert(strcmp(out, "@[bob] | 2 hops, 2-byte hashes, SNR -1.25 | recv 03:25:45 UTC") == 0);
 
   char small[16];
   assert(FirmwareBot::writeAckResponse(message, command, small, sizeof(small), &written) == BOT_WRITE_TRUNCATED);
