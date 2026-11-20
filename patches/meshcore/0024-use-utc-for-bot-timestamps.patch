@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Charles H <27925491+marm0tco@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 11:09:33 -08:00
+Subject: [PATCH 24/24] Use UTC for firmware bot timestamps
+
+---
+diff --git a/examples/companion_radio/FirmwareBot.cpp b/examples/companion_radio/FirmwareBot.cpp
+index d256e61a..09f1f503 100644
+--- a/examples/companion_radio/FirmwareBot.cpp
++++ b/examples/companion_radio/FirmwareBot.cpp
+@@ -6,10 +6,6 @@
+ #include <stdio.h>
+ #include <string.h>
+ 
+-#ifndef BOT_LOCAL_TIME_OFFSET_SECONDS
+-#define BOT_LOCAL_TIME_OFFSET_SECONDS -21600
+-#endif
+-
+ namespace {
+ 
+ uint64_t fnv1aUpdate(uint64_t hash, uint8_t value) {
+@@ -78,8 +74,7 @@ void formatTimestampHms(uint32_t timestamp, char* output, size_t output_len) {
+     snprintf(output, output_len, "Unknown");
+     return;
+   }
+-  int64_t adjusted = (int64_t)timestamp + (int64_t)BOT_LOCAL_TIME_OFFSET_SECONDS;
+-  uint32_t seconds = (uint32_t)((adjusted % 86400LL + 86400LL) % 86400LL);
++  uint32_t seconds = timestamp % 86400UL;
+   snprintf(output, output_len, "%02lu:%02lu:%02lu", (unsigned long)(seconds / 3600UL),
+            (unsigned long)((seconds / 60UL) % 60UL), (unsigned long)(seconds % 60UL));
+ }
+@@ -346,7 +341,9 @@ BotWriteResult writeAckResponse(const BotMessage& message, const BotCommand& com
+   char received_at[9];
+   formatTimestampHms(message.received_at_timestamp, received_at, sizeof(received_at));
+   char received_block[32];
+-  int received_n = snprintf(received_block, sizeof(received_block), " | recv %s", received_at);
++  int received_n = snprintf(received_block, sizeof(received_block),
++                            message.received_at_timestamp ? " | recv %s UTC" : " | recv %s",
++                            received_at);
+   if (received_n < 0) return BOT_WRITE_NO_SPACE;
+   appendBlock(output, output_len, &pos, &truncated, received_block, (size_t)received_n);
+ 
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index ce0daea4..196eeccd 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -1270,9 +1270,8 @@ BotCommandResult MyMesh::executeBotTimeCommand(const BotMessage &message, char *
+   if (now == 0) {
+     snprintf(time_str, sizeof(time_str), "not set");
+   } else {
+-    int64_t adjusted = (int64_t)now + (int64_t)BOT_LOCAL_TIME_OFFSET_SECONDS;
+-    uint32_t seconds_of_day = (uint32_t)((adjusted % 86400LL + 86400LL) % 86400LL);
+-    snprintf(time_str, sizeof(time_str), "%02lu:%02lu:%02lu", (unsigned long)(seconds_of_day / 3600UL),
++    uint32_t seconds_of_day = now % 86400UL;
++    snprintf(time_str, sizeof(time_str), "%02lu:%02lu:%02lu UTC", (unsigned long)(seconds_of_day / 3600UL),
+              (unsigned long)((seconds_of_day / 60UL) % 60UL), (unsigned long)(seconds_of_day % 60UL));
+   }
+   uint32_t days = uptime_seconds / 86400UL;
